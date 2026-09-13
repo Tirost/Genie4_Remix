@@ -1,0 +1,6 @@
+{
+  "name": "Genie Remix",
+  "description": "DragonRealms MUD client with script engine, AutoMapper, customizable triggers, highlights, and status tracking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
