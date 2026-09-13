@@ -1,0 +1,94 @@
+<Project>
+
+  <!--
+    Single source of truth for the Genie Remix client version.
+    See docs/VERSIONING.md.
+
+    Local builds use the values below. CI overrides them from the release git tag:
+
+      dotnet publish -p:VersionPrefix=4.1.1 `
+                     -p:BuildNumber=47 `
+                     -p:SourceRevisionId=a3f19c2
+
+    Command-line -p: values are MSBuild global properties, so they win over the assignments
+    here, and AssemblyVersion / FileVersion below re-derive from them automatically.
+  -->
+
+  <!--
+    Ship English resources only.
+
+    NuGet dependencies carry translated resource assemblies, which the publish step copies into
+    one folder per language (cs, de, es, fr, it, ja, ko, pl, pt-BR, ru, tr, zh-Hans, zh-Hant).
+    That was 117 of the 394 files in the 4.1.1 release and none of it was reachable: Genie Remix
+    has no localisation and its own strings are English. The translations only ever surfaced in
+    .NET framework exception messages on a non-English Windows.
+
+    Applies to every project so satellites cannot re-enter through the plugin project.
+  -->
+  <PropertyGroup>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+
+  <!--
+    Keep scratch/ out of the build.
+
+    scratch/ is a gitignored working area for throwaway diagnostics (see scratch/README.md).
+    Git ignoring it is not enough: Genie4.csproj is an SDK-style project, so it globs **/*.cs
+    from the repository root and will happily compile anything left in there. A throwaway probe
+    project under scratch/ produced its own obj\**\*.AssemblyInfo.cs, those got swept into the
+    client's compilation, and the build died with a wall of CS0579 duplicate-attribute errors.
+    That is the same symptom CLAUDE.md warns about for AssemblyInfo, from a different cause.
+
+    DefaultItemExcludes is the right hook because it is applied before the SDK's default globbing
+    rather than removing items afterwards. The path is relative to each importing project, so it
+    only ever matches the repository-root scratch/ and never a project living inside it.
+  -->
+  <PropertyGroup>
+    <DefaultItemExcludes>$(DefaultItemExcludes);scratch/**</DefaultItemExcludes>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- MAJOR.MINOR.PATCH. The only value a human edits. -->
+    <VersionPrefix>4.2.3</VersionPrefix>
+
+    <!-- Pre-release label, e.g. "rc.1". Empty for stable releases. -->
+    <VersionSuffix></VersionSuffix>
+
+    <!-- CI run number. Fourth component of FileVersion; 0 for local builds. -->
+    <BuildNumber Condition="'$(BuildNumber)' == ''">0</BuildNumber>
+
+    <!-- Short commit sha, appended to InformationalVersion as SemVer build metadata. -->
+    <SourceRevisionId Condition="'$(SourceRevisionId)' == ''">local</SourceRevisionId>
+  </PropertyGroup>
+
+  <!-- Must be evaluated before it is consumed below. MSBuild reads PropertyGroups in order. -->
+  <PropertyGroup>
+    <_VersionSuffixPart Condition="'$(VersionSuffix)' != ''">-$(VersionSuffix)</_VersionSuffixPart>
+  </PropertyGroup>
+
+  <!--
+    Version attributes apply to the client only.
+
+    Plugin/Plugins.vbproj deliberately keeps its own hand-managed AssemblyVersion (2.0.0.1) in
+    Plugin/AssemblyInfo.vb. That is the plugin ABI version that third-party plugins bind
+    against, and it must NOT move with client releases.
+  -->
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'Genie4'">
+    <!--
+      Binding identity. Fourth component is pinned to 0 so that rebuilding the same release
+      does not change the identity plugins bind against.
+    -->
+    <AssemblyVersion>$(VersionPrefix).0</AssemblyVersion>
+
+    <!-- Identifies the exact build. Safe to churn. -->
+    <FileVersion>$(VersionPrefix).$(BuildNumber)</FileVersion>
+
+    <!-- Full traceability: 4.1.1-rc.1+a3f19c2 -->
+    <InformationalVersion>$(VersionPrefix)$(_VersionSuffixPart)+$(SourceRevisionId)</InformationalVersion>
+
+    <!-- Already appended above; stop the SDK adding it a second time. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
+</Project>
