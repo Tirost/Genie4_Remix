@@ -9,6 +9,7 @@ import {
   Sun,
   Moon,
   Zap,
+  Download,
 } from 'lucide-react';
 import { ThemeType } from '../types';
 
@@ -22,6 +23,7 @@ interface TitleBarProps {
   theme: ThemeType;
   setTheme: (theme: ThemeType) => void;
   onOpenHelp: () => void;
+  onOpenDownload: () => void;
 }
 
 export const TitleBar: React.FC<TitleBarProps> = ({
@@ -34,6 +36,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   theme,
   setTheme,
   onOpenHelp,
+  onOpenDownload,
 }) => {
   const cycleTheme = () => {
     const themes: ThemeType[] = ['dark', 'classic', 'amber', 'emerald', 'light'];
@@ -158,6 +161,17 @@ export const TitleBar: React.FC<TitleBarProps> = ({
 
       {/* Utilities */}
       <div className="flex items-center space-x-1.5">
+        <button
+          id="btn-open-download-modal"
+          onClick={onOpenDownload}
+          title="Download Genie Remix 4.2.3 for Windows 10/11 (64-bit)"
+          className="flex items-center space-x-1.5 px-2.5 py-1 text-xs rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 font-medium transition-all shadow-xs"
+        >
+          <Download className="w-3.5 h-3.5 text-amber-400" />
+          <span className="hidden sm:inline">Windows 10/11 Build</span>
+          <span className="sm:hidden">Download</span>
+        </button>
+
         <button
           id="btn-cycle-theme"
           onClick={cycleTheme}

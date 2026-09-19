@@ -18,7 +18,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   DOTNET_NOLOGO: true
@@ -234,8 +234,44 @@ jobs:
             "| InformationalVersion | $($version.ProductVersion) |"
           ) -join "`n" | Add-Content $env:GITHUB_STEP_SUMMARY
 
-      # Not a release -- just a downloadable test build off main, so a change can be tried
-      # without cutting a tag. Real releases come from the tag-driven workflow (Phase 3).
+      # Create ZIP archive with base directory structure
+      - name: Create Release ZIP and Checksum
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = "Genie-Remix-4.2.3.zip"
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          [System.IO.Compression.ZipFile]::CreateFromDirectory(
+            (Resolve-Path 'publish/Genie-Remix'),
+            (Join-Path (Get-Location) $zip),
+            [System.IO.Compression.CompressionLevel]::Optimal,
+            $true
+          )
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  $zip" | Set-Content 'SHA256SUMS.txt' -Encoding ascii
+          Write-Host "Created $zip with SHA256: $hash"
+
+      # Automatically publish or update under GitHub Releases whenever synced/pushed to main
+      - name: Publish or Update GitHub Release
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "v4.2.3"
+          $zip = "Genie-Remix-4.2.3.zip"
+          gh release view $tag 2>$null | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release $tag exists. Uploading latest assets..."
+            $global:LASTEXITCODE = 0
+            gh release upload $tag $zip SHA256SUMS.txt --clobber
+          } else {
+            Write-Host "Creating release $tag..."
+            $global:LASTEXITCODE = 0
+            gh release create $tag $zip SHA256SUMS.txt --title "Genie Remix 4.2.3" --notes "Genie Remix 4.2.3 self-contained release for Windows 10/11 (64-bit). Automatically built and published from commit ${{ github.sha }}."
+          }
+
+      # Upload test build artifact
       - name: Upload test build
         uses: actions/upload-artifact@v4
         with:

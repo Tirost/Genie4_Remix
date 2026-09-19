@@ -38,6 +38,7 @@ import { ScriptExplorerModal } from './components/ScriptExplorerModal';
 import { ConfigModal } from './components/ConfigModal';
 import { ConnectModal } from './components/ConnectModal';
 import { HelpModal } from './components/HelpModal';
+import { DownloadModal } from './components/DownloadModal';
 
 export const App: React.FC = () => {
   // Navigation
@@ -45,6 +46,7 @@ export const App: React.FC = () => {
     'terminal' | 'mapper' | 'scripts' | 'config' | 'connect'
   >('terminal');
   const [showHelp, setShowHelp] = useState<boolean>(false);
+  const [showDownload, setShowDownload] = useState<boolean>(false);
   const [theme, setTheme] = useState<ThemeType>('dark');
 
   // Connection & Profiles
@@ -463,6 +465,7 @@ export const App: React.FC = () => {
         theme={theme}
         setTheme={setTheme}
         onOpenHelp={() => setShowHelp(true)}
+        onOpenDownload={() => setShowDownload(true)}
       />
 
       {/* Character Gauges & Status Bar (Barbarian Aware + Cast Ready Bar) */}
@@ -583,6 +586,9 @@ export const App: React.FC = () => {
 
       {/* Help & Info Modal */}
       {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
+
+      {/* Windows Release Download Modal */}
+      {showDownload && <DownloadModal onClose={() => setShowDownload(false)} />}
     </div>
   );
 };
