@@ -145,7 +145,9 @@ namespace GenieClient
         private Font m_MonoFont = new Font("Consolas", 9, FontStyle.Regular);
         private bool m_bTimeStamp = false;
         private bool m_bNameListOnly = false;
-        private int m_iMaxBufferSize = 500000;
+        private int m_iMaxBufferSize = 200000;
+        private volatile int m_iPendingBufferChars = 0;
+        private int m_iPendingBufferLines = 0;
         private bool m_bIsMainWindow = false;
        
         public bool IsMainWindow
@@ -343,7 +345,8 @@ namespace GenieClient
                 Font argoFont1 = null;
                 AddToBuffer(argsText, oColor, oBgColor, bMono, oFont: argoFont1);
             }
-            if (Conversions.ToBoolean(bNoCache == true | m_oRichTextBuffer.Lines.Length >= m_oParentForm.Globals.Config.iBufferLineSize))
+            int bufferLineLimit = m_oParentForm?.Globals?.Config?.iBufferLineSize ?? 5;
+            if (bNoCache || m_iPendingBufferLines >= bufferLineLimit)
             {
                 InvokeEndUpdate();
             }
@@ -459,6 +462,14 @@ namespace GenieClient
             if (sText.Length > 0)
             {
                 m_oRichTextBuffer.SelectedText = sText;
+                m_iPendingBufferChars += sText.Length;
+                for (int i = 0; i < sText.Length; i++)
+                {
+                    if (sText[i] == '\n')
+                    {
+                        m_iPendingBufferLines++;
+                    }
+                }
             }
         }
 
@@ -680,13 +691,17 @@ namespace GenieClient
         }
         private void ParseHighlights()
         {
+            if (m_iPendingBufferChars == 0) return;
             if (!m_oParentForm.Globals.Config.bHighlightsEnabled) return;
+            string bufferText = m_oRichTextBuffer.Text;
+            if (string.IsNullOrEmpty(bufferText)) return;
+
             MatchCollection oMatchCollection;
-            ParseLineHighlights(m_oRichTextBuffer.SelectionStart, m_oRichTextBuffer.Text);
+            ParseLineHighlights(m_oRichTextBuffer.SelectionStart, bufferText);
             // Highlight String (case-sensitive)
             if (!Information.IsNothing(m_oParentForm.Globals.HighlightList.RegexString))
             {
-                oMatchCollection = (MatchCollection)m_oParentForm.Globals.HighlightList.RegexString.Matches(m_oRichTextBuffer.Text);
+                oMatchCollection = (MatchCollection)m_oParentForm.Globals.HighlightList.RegexString.Matches(bufferText);
                 Highlights.Highlight oHighlightString;
                 foreach (Match oMatch in oMatchCollection)
                 {
@@ -714,7 +729,7 @@ namespace GenieClient
             // Highlight String (case-insensitive)
             if (!Information.IsNothing(m_oParentForm.Globals.HighlightList.RegexStringCI))
             {
-                oMatchCollection = (MatchCollection)m_oParentForm.Globals.HighlightList.RegexStringCI.Matches(m_oRichTextBuffer.Text);
+                oMatchCollection = (MatchCollection)m_oParentForm.Globals.HighlightList.RegexStringCI.Matches(bufferText);
                 Highlights.Highlight oHighlightStringCI;
                 foreach (Match oMatch in oMatchCollection)
                 {
@@ -740,7 +755,7 @@ namespace GenieClient
             }
 
             // Links
-            oMatchCollection = ClickRegex().Matches(m_oRichTextBuffer.Text);
+            oMatchCollection = ClickRegex().Matches(bufferText);
             int iOffset = 0;
             foreach (Match oMatch in oMatchCollection)
             {
@@ -762,7 +777,7 @@ namespace GenieClient
             // Name List
             if (!Information.IsNothing(m_oParentForm.Globals.NameList.RegexNames))
             {
-                oMatchCollection = (MatchCollection)m_oParentForm.Globals.NameList.RegexNames.Matches(m_oRichTextBuffer.Text);
+                oMatchCollection = (MatchCollection)m_oParentForm.Globals.NameList.RegexNames.Matches(bufferText);
                 Names.Name oName;
                 foreach (Match oMatch in oMatchCollection)
                 {
@@ -819,7 +834,7 @@ namespace GenieClient
 
         public void EndTextUpdate()
         {
-            if (IsDisposed)
+            if (IsDisposed || m_iPendingBufferChars == 0)
             {
                 return;
             }
@@ -873,11 +888,11 @@ namespace GenieClient
             bool bIsFlushingBuffer = false;
             if (m_bIsScrolling == true)
             {
-                BeginUpdate();
                 if (TextLength > MaxBufferSize * 2)
                 {
                     bIsFlushingBuffer = true;
-                    int iRemoveSize = TextLength / 2;
+                    BeginUpdate();
+                    int iRemoveSize = Math.Min(TextLength / 4, 30000);
                     SelectionStart = 0;
                     SelectionLength = iRemoveSize;
                     SelectedText = string.Empty;
@@ -891,10 +906,14 @@ namespace GenieClient
             {
                 bIsFlushingBuffer = true;
                 BeginUpdate();
-                int iRemoveSize = TextLength / 2;
+                int iRemoveSize = Math.Min(Math.Max(5000, TextLength - MaxBufferSize + 5000), TextLength / 3);
                 SelectionStart = 0;
                 SelectionLength = iRemoveSize;
                 SelectedText = string.Empty;
+                if (iSelectionStart >= iRemoveSize)
+                    iSelectionStart -= iRemoveSize;
+                else
+                    iSelectionStart = 0;
             }
             
             SelectionStart = int.MaxValue;
@@ -933,7 +952,16 @@ namespace GenieClient
 
         private void InvokeEndUpdate()
         {
+            if (m_iPendingBufferChars == 0)
+            {
+                return;
+            }
+
             ParseHighlights();
+            if (Control.MouseButtons == MouseButtons.None)
+            {
+                m_bMouseDown = false;
+            }
             if (m_bMouseDown == false)
             {
                 FlushBuffer();
@@ -942,11 +970,18 @@ namespace GenieClient
 
         private void FlushBuffer()
         {
+            if (m_iPendingBufferChars == 0 && m_oRichTextBuffer.TextLength == 0)
+            {
+                return;
+            }
+
             m_oRichTextBuffer.SelectionStart = 0;
             m_oRichTextBuffer.SelectionLength = int.MaxValue;
             int start = TextLength;
             AddRTF(m_oRichTextBuffer.SelectedRtf);
             m_oRichTextBuffer.Clear();
+            m_iPendingBufferChars = 0;
+            m_iPendingBufferLines = 0;
             SetLinks(start);
         }
 
@@ -1089,6 +1124,32 @@ namespace GenieClient
             finally
             {
                 m_bMouseDown = false;
+            }
+        }
+
+        protected override void OnMouseCaptureChanged(EventArgs e)
+        {
+            base.OnMouseCaptureChanged(e);
+            if (m_bMouseDown && Control.MouseButtons == MouseButtons.None)
+            {
+                m_bMouseDown = false;
+                if (m_iPendingBufferChars > 0 || m_oRichTextBuffer.TextLength > 0)
+                {
+                    FlushBuffer();
+                }
+            }
+        }
+
+        protected override void OnLostFocus(EventArgs e)
+        {
+            base.OnLostFocus(e);
+            if (m_bMouseDown)
+            {
+                m_bMouseDown = false;
+                if (m_iPendingBufferChars > 0 || m_oRichTextBuffer.TextLength > 0)
+                {
+                    FlushBuffer();
+                }
             }
         }
         public void InsertLink(string text, string hyperlink)

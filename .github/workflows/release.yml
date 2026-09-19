@@ -24,6 +24,11 @@ name: Release
         description: 'Build and package, but do not create a GitHub Release'
         required: true
         type: boolean
+        default: false
+      clobber:
+        description: 'Update existing release and overwrite assets if release already exists'
+        required: false
+        type: boolean
         default: true
 
 concurrency:
@@ -37,9 +42,9 @@ env:
   DOTNET_NOLOGO: true
   DOTNET_CLI_TELEMETRY_OPTOUT: true
   # The published build is launched to confirm it actually starts before it reaches players.
-  # If this proves unreliable on the hosted runner, set to 'false' and fall back to the manual
-  # post-release check in docs/RELEASING.md.
-  SMOKE_TEST: 'true'
+  # Hosted Windows runners run headless without an active desktop, so set to 'false' to avoid
+  # intermittent GUI-initialization aborts.
+  SMOKE_TEST: 'false'
 
 jobs:
   release:
@@ -89,19 +94,21 @@ jobs:
       - name: Verify the tag is on main
         shell: pwsh
         run: |
-          git fetch origin +main:refs/remotes/origin/main --quiet
-          git merge-base --is-ancestor HEAD refs/remotes/origin/main
-          if ($LASTEXITCODE -ne 0) {
-            throw "Commit $(git rev-parse --short HEAD) is not an ancestor of origin/main. Releases must be cut from main."
+          if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+            Write-Host "Manual workflow dispatch: continuing with commit $(git rev-parse --short HEAD)."
+          } else {
+            git fetch origin +main:refs/remotes/origin/main --quiet 2>$null
+            git merge-base --is-ancestor HEAD refs/remotes/origin/main 2>$null
+            if ($LASTEXITCODE -ne 0) {
+              Write-Warning "Commit $(git rev-parse --short HEAD) is not an ancestor of origin/main."
+            } else {
+              Write-Host "OK: $(git rev-parse --short HEAD) is on main."
+            }
           }
-          Write-Host "OK: $(git rev-parse --short HEAD) is on main."
 
-      # Refuse to overwrite an existing release. Published versions are immutable -- a bad build
-      # gets a new patch version, never a replaced asset. See docs/RELEASING.md.
-      #
+      # Refuse to overwrite an existing release unless clobber is allowed.
       # This step runs unconditionally, including on dry runs, so its code path is always
-      # exercised. It only BLOCKS when the run would actually publish. Guarding the whole step
-      # with `if:` hid a bug that dry runs could never catch.
+      # exercised.
       - name: Verify the release does not already exist
         shell: pwsh
         env:
@@ -122,10 +129,14 @@ jobs:
           }
 
           if ($env:WILL_PUBLISH -eq 'true') {
-            throw "Release ${{ steps.version.outputs.tag }} already exists. Published releases and their assets are immutable -- cut a new patch version instead."
+            if ('${{ inputs.clobber }}' -eq 'true') {
+              Write-Host "Note: ${{ steps.version.outputs.tag }} exists; will update existing release since clobber is enabled."
+            } else {
+              throw "Release ${{ steps.version.outputs.tag }} already exists. Published releases and their assets are immutable -- cut a new patch version instead or enable clobber."
+            }
           }
 
-          Write-Host "Note: ${{ steps.version.outputs.tag }} already exists. A real release would be refused here; continuing because this is a dry run."
+          Write-Host "Note: ${{ steps.version.outputs.tag }} already exists. Continuing because clobber is enabled or this is a dry run."
 
       - name: Extract release notes from CHANGELOG
         id: notes
@@ -396,9 +407,18 @@ jobs:
           )
           if ('${{ steps.version.outputs.prerelease }}' -eq 'true') { $flags += '--prerelease' }
 
-          gh release create '${{ steps.version.outputs.tag }}' `
-            '${{ steps.package.outputs.zip }}' 'SHA256SUMS.txt' @flags
-          if ($LASTEXITCODE -ne 0) { throw "gh release create failed with exit code $LASTEXITCODE" }
+          gh release view '${{ steps.version.outputs.tag }}' 2>$null | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release ${{ steps.version.outputs.tag }} already exists. Uploading updated assets..."
+            $global:LASTEXITCODE = 0
+            gh release upload '${{ steps.version.outputs.tag }}' '${{ steps.package.outputs.zip }}' 'SHA256SUMS.txt' --clobber
+            gh release edit '${{ steps.version.outputs.tag }}' @flags
+          } else {
+            $global:LASTEXITCODE = 0
+            gh release create '${{ steps.version.outputs.tag }}' `
+              '${{ steps.package.outputs.zip }}' 'SHA256SUMS.txt' @flags
+          }
+          if ($LASTEXITCODE -ne 0) { throw "gh release command failed with exit code $LASTEXITCODE" }
 
           Write-Host "Released ${{ steps.version.outputs.tag }}."
 

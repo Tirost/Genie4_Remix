@@ -8,7 +8,7 @@ interface DownloadModalProps {
 export const DownloadModal: React.FC<DownloadModalProps> = ({ onClose }) => {
   const [copied, setCopied] = useState(false);
   const sha256 = '986c008af51d0f8517b7e1f89a60f6b9f65c9cda76e5f8f828cc381ee04a6004';
-  const directDownloadUrl = '/Genie-Remix-4.2.3.zip';
+  const directDownloadUrl = '/Genie-Remix-4.2.4.zip';
 
   const copyHash = () => {
     navigator.clipboard.writeText(sha256);
@@ -30,7 +30,7 @@ export const DownloadModal: React.FC<DownloadModalProps> = ({ onClose }) => {
             </div>
             <div>
               <h2 className="text-sm sm:text-base font-bold text-stone-100 flex items-center gap-2">
-                Download Genie Remix v4.2.3
+                Download Genie Remix v4.2.4
                 <span className="text-[10px] font-mono uppercase bg-emerald-950/80 text-emerald-400 border border-emerald-700/60 px-2 py-0.5 rounded">
                   Windows 10 / 11 (64-bit)
                 </span>
@@ -56,7 +56,7 @@ export const DownloadModal: React.FC<DownloadModalProps> = ({ onClose }) => {
             <div className="space-y-1 text-center sm:text-left">
               <div className="font-semibold text-stone-100 flex items-center justify-center sm:justify-start gap-1.5 text-sm">
                 <FolderArchive className="w-4 h-4 text-amber-400" />
-                <span>Genie-Remix-4.2.3.zip</span>
+                <span>Genie-Remix-4.2.4.zip</span>
               </div>
               <p className="text-[11px] text-stone-400">
                 Size: ~46.5 MB • Architecture: win-x64 • No prerequisites needed
@@ -66,7 +66,7 @@ export const DownloadModal: React.FC<DownloadModalProps> = ({ onClose }) => {
             <a
               id="btn-direct-download-zip"
               href={directDownloadUrl}
-              download="Genie-Remix-4.2.3.zip"
+              download="Genie-Remix-4.2.4.zip"
               className="w-full sm:w-auto inline-flex items-center justify-center space-x-2 px-5 py-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-stone-950 font-bold shadow-md hover:shadow-amber-500/20 transition-all text-xs"
             >
               <Download className="w-4 h-4" />
@@ -114,7 +114,7 @@ export const DownloadModal: React.FC<DownloadModalProps> = ({ onClose }) => {
                 Click <strong className="text-amber-300">Download ZIP Now</strong> above or use the Download button in the top navigation bar.
               </li>
               <li>
-                In your Windows <code className="bg-stone-900 px-1 py-0.5 rounded text-stone-200">Downloads</code> folder, right-click <code className="bg-stone-900 px-1 py-0.5 rounded text-stone-200">Genie-Remix-4.2.3.zip</code> and select <strong className="text-stone-100">&quot;Extract All...&quot;</strong>.
+                In your Windows <code className="bg-stone-900 px-1 py-0.5 rounded text-stone-200">Downloads</code> folder, right-click <code className="bg-stone-900 px-1 py-0.5 rounded text-stone-200">Genie-Remix-4.2.4.zip</code> and select <strong className="text-stone-100">&quot;Extract All...&quot;</strong>.
               </li>
               <li>
                 Open the extracted <code className="bg-stone-900 px-1 py-0.5 rounded text-amber-300">Genie-Remix</code> folder and double-click <strong className="text-emerald-300">Genie.exe</strong>.
@@ -136,15 +136,15 @@ export const DownloadModal: React.FC<DownloadModalProps> = ({ onClose }) => {
               </p>
               <ul className="list-disc list-inside space-y-1.5 pl-1 text-stone-300">
                 <li>
-                  <strong className="text-stone-100">Automatic on Sync:</strong> Whenever you click &quot;Publish/Sync changes to GitHub&quot; in AI Studio, the GitHub Actions workflow automatically packages and publishes <code className="text-amber-300 font-mono">Genie-Remix-4.2.3.zip</code> directly into your repository&apos;s <strong className="text-stone-100">Releases</strong> tab.
+                  <strong className="text-stone-100">Automatic on Sync:</strong> Whenever you click &quot;Publish/Sync changes to GitHub&quot; in AI Studio, the GitHub Actions workflow automatically packages and publishes <code className="text-amber-300 font-mono">Genie-Remix-4.2.4.zip</code> directly into your repository&apos;s <strong className="text-stone-100">Releases</strong> tab.
                 </li>
                 <li>
-                  <strong className="text-stone-100">Manual Trigger via GitHub:</strong> On GitHub, go to <strong className="text-stone-200">Actions &rarr; Release &rarr; Run workflow</strong>, enter version <code className="text-stone-200 font-mono">4.2.3</code>, uncheck dry run, and click Run.
+                  <strong className="text-stone-100">Manual Trigger via GitHub:</strong> On GitHub, go to <strong className="text-stone-200">Actions &rarr; Release &rarr; Run workflow</strong>, enter version <code className="text-stone-200 font-mono">4.2.4</code>, uncheck dry run, and click Run.
                 </li>
                 <li>
                   <strong className="text-stone-100">Tag Trigger:</strong> If using the terminal or git, run:
                   <div className="font-mono text-[10px] bg-stone-900 p-2 rounded mt-1 border border-stone-800 text-stone-300">
-                    git tag v4.2.3 && git push origin v4.2.3
+                    git tag v4.2.4 && git push origin v4.2.4
                   </div>
                 </li>
               </ul>

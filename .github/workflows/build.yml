@@ -239,7 +239,7 @@ jobs:
         shell: pwsh
         run: |
           Add-Type -AssemblyName System.IO.Compression.FileSystem
-          $zip = "Genie-Remix-4.2.3.zip"
+          $zip = "Genie-Remix-4.2.4.zip"
           if (Test-Path $zip) { Remove-Item $zip -Force }
           [System.IO.Compression.ZipFile]::CreateFromDirectory(
             (Resolve-Path 'publish/Genie-Remix'),
@@ -253,13 +253,13 @@ jobs:
 
       # Automatically publish or update under GitHub Releases whenever synced/pushed to main
       - name: Publish or Update GitHub Release
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = "v4.2.3"
-          $zip = "Genie-Remix-4.2.3.zip"
+          $tag = "v4.2.4"
+          $zip = "Genie-Remix-4.2.4.zip"
           gh release view $tag 2>$null | Out-Null
           if ($LASTEXITCODE -eq 0) {
             Write-Host "Release $tag exists. Uploading latest assets..."
@@ -268,7 +268,7 @@ jobs:
           } else {
             Write-Host "Creating release $tag..."
             $global:LASTEXITCODE = 0
-            gh release create $tag $zip SHA256SUMS.txt --title "Genie Remix 4.2.3" --notes "Genie Remix 4.2.3 self-contained release for Windows 10/11 (64-bit). Automatically built and published from commit ${{ github.sha }}."
+            gh release create $tag $zip SHA256SUMS.txt --title "Genie Remix 4.2.4" --notes "Genie Remix 4.2.4 self-contained release for Windows 10/11 (64-bit). Automatically built and published from commit ${{ github.sha }}."
           }
 
       # Upload test build artifact

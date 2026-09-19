@@ -59,7 +59,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
           <span className="font-semibold text-sm tracking-tight text-stone-100 flex items-center gap-1.5">
             Genie Remix
             <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-stone-800 text-amber-400/90 border border-stone-700">
-              v4.0.0
+              v4.2.4
             </span>
           </span>
         </div>

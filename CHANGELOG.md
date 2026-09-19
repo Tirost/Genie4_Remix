@@ -20,6 +20,25 @@ Sections, in order, omitting any that are empty:
 
 ---
 
+## [4.2.4] — 2026-09-19
+
+Performance overhaul to eliminate lag and delayed command processing during long-running sessions.
+
+### Fixed
+- **Application and command input lag after running for extended periods.** As output accumulated,
+  WinForms RichTextBox operations across all open windows suffered from severe O(N) overhead.
+  Optimized buffer management by tracking line counts incrementally instead of allocating full line splits on
+  every line of game text (GRX-009).
+- **Redundant highlight parsing and buffer flushing on idle windows.** Highlighting passes and RTF
+  serialization now short-circuit immediately whenever a window has no pending updates,
+  massively reducing UI thread and CPU overhead on incoming text and command dispatch.
+- **Buffer trim hitches.** Replaced massive 50% buffer drops with smooth, bounded progressive
+  trims wrapped in Win32 update guards to eliminate UI freezes and stuttering.
+- **Output freeze recovery.** Output no longer locks up if mouse capture or focus is lost while
+  selecting text (GRX-010).
+
+---
+
 ## [4.2.3] — 2026-08-12
 
 A long-standing stream-routing fix, reported by **Allyebot**.
