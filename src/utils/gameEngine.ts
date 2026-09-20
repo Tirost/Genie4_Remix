@@ -73,6 +73,27 @@ export function expandAliases(input: string, aliases: AliasRule[]): string {
   return trimmed;
 }
 
+// Pre-compiled regex cache to eliminate render and ingestion overhead
+const regexCache = new Map<string, RegExp | null>();
+
+export function getCachedRegex(pattern: string, isRegex: boolean, isCaseInsensitive: boolean): RegExp | null {
+  const key = `${isRegex ? 'R' : 'S'}:${isCaseInsensitive ? 'I' : 'C'}:${pattern}`;
+  if (regexCache.has(key)) {
+    return regexCache.get(key) || null;
+  }
+  try {
+    const flags = isCaseInsensitive ? 'i' : '';
+    const compiled = isRegex
+      ? new RegExp(pattern, flags)
+      : new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags);
+    regexCache.set(key, compiled);
+    return compiled;
+  } catch {
+    regexCache.set(key, null);
+    return null;
+  }
+}
+
 // Apply substitutes to text
 export function applySubstitutes(text: string, substitutes: SubstituteRule[]): string {
   let result = text;
@@ -80,8 +101,8 @@ export function applySubstitutes(text: string, substitutes: SubstituteRule[]): s
     if (!sub.enabled) continue;
     try {
       if (sub.isRegex) {
-        const regex = new RegExp(sub.pattern, 'gi');
-        result = result.replace(regex, sub.replacement);
+        const regex = getCachedRegex(sub.pattern, true, true);
+        if (regex) result = result.replace(regex, sub.replacement);
       } else {
         result = result.split(sub.pattern).join(sub.replacement);
       }
@@ -92,31 +113,40 @@ export function applySubstitutes(text: string, substitutes: SubstituteRule[]): s
   return result;
 }
 
-// Apply highlights to an output line
+// Compute highlights for text at ingestion time (Genie PrintTextWithParse model)
+export function computeLineHighlights(
+  text: string,
+  highlights: HighlightRule[]
+): { color?: string; bgColor?: string; bold?: boolean } {
+  if (!text) return {};
+  for (const h of highlights) {
+    if (!h.enabled) continue;
+    const regex = getCachedRegex(h.pattern, h.isRegex, h.isCaseInsensitive);
+    if (regex && regex.test(text)) {
+      return {
+        color: h.fgColor,
+        bgColor: h.bgColor || undefined,
+        bold: h.bold,
+      };
+    }
+  }
+  return {};
+}
+
+// Apply highlights to an output line (cached for zero-lag rendering)
 export function applyHighlights(
   line: OutputLine,
   highlights: HighlightRule[]
 ): { color?: string; bgColor?: string; bold?: boolean } {
-  for (const h of highlights) {
-    if (!h.enabled) continue;
-    try {
-      const flags = h.isCaseInsensitive ? 'i' : '';
-      const regex = h.isRegex
-        ? new RegExp(h.pattern, flags)
-        : new RegExp(h.pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags);
-
-      if (regex.test(line.text)) {
-        return {
-          color: h.fgColor,
-          bgColor: h.bgColor || undefined,
-          bold: h.bold,
-        };
-      }
-    } catch {
-      // Ignore invalid regex
-    }
+  // If line already has pre-computed styling, use it immediately
+  if (line.color || line.bgColor || line.bold) {
+    return {
+      color: line.color,
+      bgColor: line.bgColor,
+      bold: line.bold,
+    };
   }
-  return {};
+  return computeLineHighlights(line.text, highlights);
 }
 
 // Execute player command in the simulated DragonRealms world
@@ -480,6 +510,92 @@ export function processCommand(
         stream: 'main',
         color: '#38bdf8',
       });
+      break;
+    }
+
+    case 'inv':
+    case 'inventory': {
+      const invHeader = `You are wearing:`;
+      const wornItems = [
+        'a reinforced leather backpack',
+        'a padded gambeson of quilted wool',
+        'a pair of hardened leather boots',
+        'a steel ring set with a star ruby',
+        'a heavy toolbelt with assorted pouches',
+      ];
+      const heldItems = `Holding: [Left Hand: ${state.status.leftHand}] [Right Hand: ${state.status.rightHand}]`;
+
+      // Update both Main and Inventory streams
+      sendOutput({ text: invHeader, stream: 'main', color: '#38bdf8', bold: true });
+      sendOutput({ text: invHeader, stream: 'inv', color: '#38bdf8', bold: true });
+
+      wornItems.forEach((item) => {
+        sendOutput({ text: `  - ${item}`, stream: 'main', color: '#e2e8f0' });
+        sendOutput({ text: `  - ${item}`, stream: 'inv', color: '#e2e8f0' });
+      });
+
+      sendOutput({ text: heldItems, stream: 'main', color: '#facc15' });
+      sendOutput({ text: heldItems, stream: 'inv', color: '#facc15' });
+      break;
+    }
+
+    case 'spells':
+    case 'activespells':
+    case 'perc':
+    case 'perception': {
+      const spellHeader = `=== Active Magical Spells & Wards ===`;
+      const activeSpellsList = [
+        'Surefoot (18 roisaen remaining)',
+        'Manifest Force [Barrier] (24 roisaen remaining)',
+        'Strange Arrow (Attuned, dormant)',
+      ];
+
+      sendOutput({ text: spellHeader, stream: 'main', color: '#c084fc', bold: true });
+      sendOutput({ text: spellHeader, stream: 'activespells', color: '#c084fc', bold: true });
+
+      activeSpellsList.forEach((sp) => {
+        sendOutput({ text: `  * ${sp}`, stream: 'main', color: '#e9d5ff' });
+        sendOutput({ text: `  * ${sp}`, stream: 'activespells', color: '#e9d5ff' });
+      });
+      break;
+    }
+
+    case 'exp':
+    case 'skills':
+    case 'experience': {
+      sendOutput({
+        text: `Skill Experience Overview:`,
+        stream: 'main',
+        color: '#38bdf8',
+        bold: true,
+      });
+      sendOutput({
+        text: `  Shield Usage:       142 62% mind lock      Parry Ability:      138 31% clear`,
+        stream: 'main',
+        color: '#e2e8f0',
+      });
+      sendOutput({
+        text: `  Heavy Thrown:       112 18% fluid          Attunement:         125 54% focused`,
+        stream: 'main',
+        color: '#e2e8f0',
+      });
+      sendOutput({
+        text: `  Targeted Magic:     130 40% learning       Sorcery:             88 05% clear`,
+        stream: 'main',
+        color: '#e2e8f0',
+      });
+      sendOutput({
+        text: `Overall Mind State: clear (0/34 pool)`,
+        stream: 'main',
+        color: '#22c55e',
+      });
+      break;
+    }
+
+    case 'familiar': {
+      const msg = args ? `Your familiar relays: "${args}"` : `Your raven familiar glides onto your shoulder and preens its black feathers.`;
+      sendOutput({ text: msg, stream: 'familiar', color: '#a7f3d0' });
+      sendOutput({ text: msg, stream: 'main', color: '#a7f3d0' });
       break;
     }
 

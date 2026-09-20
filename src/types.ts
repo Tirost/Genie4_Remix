@@ -54,7 +54,30 @@ export interface CharacterStatus {
   roomExits: string[];
 }
 
-export type StreamId = 'main' | 'combat' | 'speech' | 'thoughts' | 'raw';
+export type StreamId =
+  | 'main'
+  | 'combat'
+  | 'speech'
+  | 'thoughts'
+  | 'inv'
+  | 'room'
+  | 'activespells'
+  | 'familiar'
+  | 'death'
+  | 'logons'
+  | 'raw'
+  | string;
+
+export interface StreamWindowConfig {
+  id: string;
+  title: string;
+  subtitle?: string;
+  ifClosed?: string;
+  isCustom?: boolean;
+  unreadCount: number;
+}
+
+export type WindowLayoutMode = 'tabs' | 'split-vertical' | 'split-horizontal';
 
 export interface OutputLine {
   id: string;

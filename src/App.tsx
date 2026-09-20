@@ -11,6 +11,7 @@ import {
   CharacterProfile,
   ScriptState,
   ThemeType,
+  StreamWindowConfig,
 } from './types';
 import {
   DEFAULT_ROOMS,
@@ -26,9 +27,11 @@ import {
   createInitialCharacterStatus,
   expandAliases,
   applySubstitutes,
+  computeLineHighlights,
   processCommand,
   findPath,
 } from './utils/gameEngine';
+import { GameXmlStreamParser, DEFAULT_STREAM_WINDOWS } from './utils/xmlStreamParser';
 import { GenieScriptInterpreter } from './utils/scriptRunner';
 import { TitleBar } from './components/TitleBar';
 import { StatusBars } from './components/StatusBars';
@@ -67,8 +70,88 @@ export const App: React.FC = () => {
     6: ['wildflower sprig', 'fallen branch'],
   });
 
-  // Terminal Buffer
-  const [lines, setLines] = useState<OutputLine[]>([]);
+  // Dedicated Per-Window Stream Buffers (stores up to 1000 lines per window so non-active windows never lose data)
+  const [windowBuffers, setWindowBuffers] = useState<Record<string, OutputLine[]>>({
+    main: [
+      {
+        id: 'init-1',
+        text: '*** Welcome to Genie Remix v4.2.4 (High-Performance Client) ***',
+        stream: 'main',
+        timestamp: new Date().toLocaleTimeString(),
+        color: '#fbbf24',
+        bold: true,
+      },
+      {
+        id: 'init-2',
+        text: 'Connected to DragonRealms. Multi-window stream routing & autonomous triggers active.',
+        stream: 'main',
+        timestamp: new Date().toLocaleTimeString(),
+        color: '#38bdf8',
+      },
+    ],
+    combat: [
+      {
+        id: 'init-c1',
+        text: '[Combat Window Active] Melee, ranged, brawling, and magical attacks will route here.',
+        stream: 'combat',
+        timestamp: new Date().toLocaleTimeString(),
+        color: '#ef4444',
+      },
+    ],
+    speech: [
+      {
+        id: 'init-s1',
+        text: '[Speech Window Active] Whispers, tells, conversations, and emotes will route here.',
+        stream: 'speech',
+        timestamp: new Date().toLocaleTimeString(),
+        color: '#38bdf8',
+      },
+    ],
+    thoughts: [
+      {
+        id: 'init-t1',
+        text: '[Thoughts Window Active] ESP thought networks and mind messages will route here.',
+        stream: 'thoughts',
+        timestamp: new Date().toLocaleTimeString(),
+        color: '#c084fc',
+      },
+    ],
+    room: [
+      {
+        id: 'init-r1',
+        text: '[Room Window Active] Environmental room descriptions, obvious paths, and objects will route here.',
+        stream: 'room',
+        timestamp: new Date().toLocaleTimeString(),
+        color: '#34d399',
+      },
+    ],
+    inv: [
+      {
+        id: 'init-i1',
+        text: '[Inventory Window Active] Type "inv" to inspect carried items, weapons, and containers.',
+        stream: 'inv',
+        timestamp: new Date().toLocaleTimeString(),
+        color: '#fbbf24',
+      },
+    ],
+    activespells: [
+      {
+        id: 'init-sp1',
+        text: '[Active Spells Window Active] Type "spells" or "perc" to monitor ongoing wards and buffs.',
+        stream: 'activespells',
+        timestamp: new Date().toLocaleTimeString(),
+        color: '#22d3ee',
+      },
+    ],
+    familiar: [],
+    death: [],
+    logons: [],
+    raw: [],
+  });
+
+  const [windowConfigs, setWindowConfigs] = useState<StreamWindowConfig[]>(DEFAULT_STREAM_WINDOWS);
+  const [activeStream, setActiveStream] = useState<string>('main');
+  const [echoStreamsToMain, setEchoStreamsToMain] = useState<boolean>(true);
 
   // Config Rules
   const [highlights, setHighlights] = useState<HighlightRule[]>(DEFAULT_HIGHLIGHTS);
@@ -87,33 +170,88 @@ export const App: React.FC = () => {
   const [scripts, setScripts] = useState(DEFAULT_SCRIPTS);
   const [activeScriptState, setActiveScriptState] = useState<ScriptState | null>(null);
   const interpreterRef = useRef<GenieScriptInterpreter | null>(null);
+  const xmlParserRef = useRef<GameXmlStreamParser | null>(null);
 
   const currentProfile = profiles.find((p) => p.id === activeProfileId) || profiles[0];
 
-  // Helper to add output line with substitution
+  // Switch active window stream and clear its unread badge
+  const handleSelectStream = useCallback((streamId: string) => {
+    setActiveStream(streamId);
+    setWindowConfigs((prev) =>
+      prev.map((cfg) => (cfg.id === streamId ? { ...cfg, unreadCount: 0 } : cfg))
+    );
+  }, []);
+
+  // Clear output of a specific stream or active stream
+  const handleClearOutput = useCallback((streamId?: string) => {
+    const target = streamId || activeStream;
+    setWindowBuffers((prev) => ({
+      ...prev,
+      [target]: [],
+    }));
+  }, [activeStream]);
+
+  // Robust Stream & Line Router (Zero-Lag Pre-Computed Highlighting & Per-Window Buffering)
   const addOutputLine = useCallback(
     (lineData: Partial<OutputLine>) => {
-      const processedText = lineData.text
-        ? applySubstitutes(lineData.text, substitutes)
-        : '';
+      const rawText = lineData.text || '';
+      const processedText = rawText ? applySubstitutes(rawText, substitutes) : '';
+      const targetStream = lineData.stream || 'main';
+
+      // Pre-compute highlights at ingestion time (Genie Core/Game.cs PrintTextWithParse model)
+      const hl = computeLineHighlights(processedText, highlights);
 
       const newLine: OutputLine = {
-        id: `line-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+        id: lineData.id || `line-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
         text: processedText,
-        stream: lineData.stream || 'main',
-        timestamp: new Date().toLocaleTimeString(),
-        color: lineData.color,
-        bgColor: lineData.bgColor,
-        bold: lineData.bold,
+        stream: targetStream,
+        timestamp: lineData.timestamp || new Date().toLocaleTimeString(),
+        color: lineData.color || hl.color,
+        bgColor: lineData.bgColor || hl.bgColor,
+        bold: lineData.bold !== undefined ? lineData.bold : hl.bold,
         isPrompt: lineData.isPrompt,
         isInput: lineData.isInput,
         isSystem: lineData.isSystem,
       };
 
-      setLines((prev) => [...prev.slice(-300), newLine]);
+      // Route directly to the destination window's buffer (stores up to 1000 lines)
+      setWindowBuffers((prev) => {
+        const existing = prev[targetStream] || [];
+        const updated = [...existing.slice(-999), newLine];
+
+        // Also echo to Main if enabled and not already Main or Raw or System
+        if (
+          echoStreamsToMain &&
+          targetStream !== 'main' &&
+          targetStream !== 'raw' &&
+          !lineData.isSystem
+        ) {
+          const mainExisting = prev.main || [];
+          return {
+            ...prev,
+            [targetStream]: updated,
+            main: [...mainExisting.slice(-999), newLine],
+          };
+        }
+
+        return {
+          ...prev,
+          [targetStream]: updated,
+        };
+      });
+
+      // Update unread count for non-active windows
+      setWindowConfigs((prev) =>
+        prev.map((cfg) => {
+          if (cfg.id === targetStream && targetStream !== activeStream) {
+            return { ...cfg, unreadCount: cfg.unreadCount + 1 };
+          }
+          return cfg;
+        })
+      );
 
       // Inform active script of new output
-      if (interpreterRef.current && processedText) {
+      if (interpreterRef.current && processedText && !lineData.isInput) {
         interpreterRef.current.onGameOutput(processedText);
       }
 
@@ -130,7 +268,7 @@ export const App: React.FC = () => {
               if (tr.actionType === 'command') {
                 setTimeout(() => {
                   handleCommand(tr.actionValue, true);
-                }, 300);
+                }, 250);
               } else if (tr.actionType === 'echo') {
                 setTimeout(() => {
                   addOutputLine({
@@ -139,7 +277,7 @@ export const App: React.FC = () => {
                     color: '#a855f7',
                     bold: true,
                   });
-                }, 200);
+                }, 150);
               }
             }
           } catch {
@@ -148,8 +286,53 @@ export const App: React.FC = () => {
         });
       }
     },
-    [substitutes, triggers]
+    [substitutes, highlights, echoStreamsToMain, activeStream, triggers]
   );
+
+  // Initialize XML Stream Parser mirroring Core/Game.cs with GRX-024 flush fix
+  useEffect(() => {
+    xmlParserRef.current = new GameXmlStreamParser({
+      onAddLine: (line) => {
+        addOutputLine(line);
+      },
+      onClearStream: (streamId) => {
+        handleClearOutput(streamId);
+      },
+      onRegisterStreamWindow: (config) => {
+        setWindowConfigs((prev) => {
+          const existing = prev.find((c) => c.id === config.id);
+          if (existing) {
+            return prev.map((c) => (c.id === config.id ? { ...c, title: config.title || c.title } : c));
+          }
+          return [...prev, config];
+        });
+        setWindowBuffers((prev) => {
+          if (!prev[config.id]) {
+            return { ...prev, [config.id]: [] };
+          }
+          return prev;
+        });
+      },
+      onRoundTime: (seconds) => {
+        setStatus((prev) => ({
+          ...prev,
+          roundtimeRemaining: seconds,
+          roundtimeTotal: seconds,
+        }));
+      },
+      onCastTime: (seconds) => {
+        setStatus((prev) => ({
+          ...prev,
+          castTimeRemaining: seconds,
+          castTimeTotal: seconds,
+          castReady: false,
+        }));
+      },
+      onSpellPrepared: (spell) => {
+        setStatus((prev) => ({ ...prev, preparedSpell: spell }));
+      },
+    });
+  }, [addOutputLine, handleClearOutput]);
 
   // Core Command Dispatcher
   const handleCommand = useCallback(
@@ -163,6 +346,15 @@ export const App: React.FC = () => {
         isInput: true,
       });
 
+      // Direct XML Stream Testing (e.g. "xml <pushStream id="combat"/>Swords clash!<popStream/>")
+      if (expanded.startsWith('xml ') || (expanded.startsWith('<') && expanded.includes('>'))) {
+        const rawXml = expanded.startsWith('xml ') ? expanded.slice(4).trim() : expanded;
+        if (xmlParserRef.current) {
+          xmlParserRef.current.parseGameRow(rawXml);
+          return;
+        }
+      }
+
       // Check Genie client commands starting with '#'
       if (expanded.startsWith('#')) {
         const parts = expanded.slice(1).trim().split(' ');
@@ -170,7 +362,14 @@ export const App: React.FC = () => {
         const cArg = parts.slice(1).join(' ');
 
         if (cCmd === 'clear') {
-          setLines([]);
+          handleClearOutput(cArg || undefined);
+          return;
+        }
+
+        if (cCmd === 'stream') {
+          if (cArg) {
+            handleSelectStream(cArg.toLowerCase());
+          }
           return;
         }
 
@@ -475,16 +674,21 @@ export const App: React.FC = () => {
       <main className="flex-1 flex overflow-hidden relative">
         {activeTab === 'terminal' && (
           <TerminalWindow
-            lines={lines}
+            windowBuffers={windowBuffers}
+            windowConfigs={windowConfigs}
+            activeStream={activeStream}
+            setActiveStream={handleSelectStream}
             highlights={highlights}
             macros={macros}
             theme={theme}
             onSendCommand={handleCommand}
-            onClearOutput={() => setLines([])}
+            onClearOutput={handleClearOutput}
             onAddHighlightText={handleAddHighlightText}
             onAddTriggerText={handleAddTriggerText}
             onAddSubstituteText={handleAddSubstituteText}
             onAddAliasText={handleAddAliasText}
+            echoStreamsToMain={echoStreamsToMain}
+            onToggleEchoStreams={() => setEchoStreamsToMain(!echoStreamsToMain)}
           />
         )}
 

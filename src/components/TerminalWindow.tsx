@@ -1,80 +1,221 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, memo } from 'react';
 import {
   OutputLine,
-  StreamId,
   HighlightRule,
   ThemeType,
   MacroRule,
+  StreamWindowConfig,
 } from '../types';
-import { applyHighlights } from '../utils/gameEngine';
 import {
   Send,
   Trash2,
   ArrowDown,
   Sparkles,
-  Zap,
   MessageSquare,
   Swords,
   Layers,
+  Eye,
+  Package,
+  Wand2,
+  Bird,
+  Skull,
+  UserCheck,
+  Code2,
+  Columns,
+  Maximize2,
+  Copy,
+  Check,
 } from 'lucide-react';
 
 interface TerminalWindowProps {
-  lines: OutputLine[];
+  windowBuffers: Record<string, OutputLine[]>;
+  windowConfigs: StreamWindowConfig[];
+  activeStream: string;
+  setActiveStream: (streamId: string) => void;
   highlights: HighlightRule[];
   macros: MacroRule[];
   theme: ThemeType;
   onSendCommand: (cmd: string) => void;
-  onClearOutput: () => void;
+  onClearOutput: (streamId?: string) => void;
   onAddHighlightText: (text: string) => void;
   onAddTriggerText: (text: string) => void;
   onAddSubstituteText: (text: string) => void;
   onAddAliasText: (text: string) => void;
+  echoStreamsToMain: boolean;
+  onToggleEchoStreams: () => void;
 }
 
-export const TerminalWindow: React.FC<TerminalWindowProps> = ({
+// Stream icons mapping
+const getStreamIcon = (id: string) => {
+  switch (id) {
+    case 'combat':
+      return <Swords className="w-3 h-3 text-red-400" />;
+    case 'speech':
+      return <MessageSquare className="w-3 h-3 text-sky-400" />;
+    case 'thoughts':
+      return <Sparkles className="w-3 h-3 text-purple-400" />;
+    case 'room':
+      return <Eye className="w-3 h-3 text-emerald-400" />;
+    case 'inv':
+      return <Package className="w-3 h-3 text-amber-400" />;
+    case 'activespells':
+      return <Wand2 className="w-3 h-3 text-cyan-400" />;
+    case 'familiar':
+      return <Bird className="w-3 h-3 text-teal-400" />;
+    case 'death':
+      return <Skull className="w-3 h-3 text-rose-500" />;
+    case 'logons':
+      return <UserCheck className="w-3 h-3 text-lime-400" />;
+    case 'raw':
+      return <Code2 className="w-3 h-3 text-stone-400" />;
+    case 'main':
+    default:
+      return <Layers className="w-3 h-3 text-amber-400" />;
+  }
+};
+
+// Memoized individual terminal output line: Renders in O(1) time with 0 regex evaluation!
+const TerminalLineItem = memo(({ line }: { line: OutputLine }) => {
+  return (
+    <div
+      className={`transition-opacity duration-75 select-text ${
+        line.isInput ? 'text-amber-300 pl-2 border-l-2 border-amber-600 my-0.5' : ''
+      } ${line.isSystem ? 'text-stone-500 text-xs italic' : ''}`}
+      style={{
+        color: line.color,
+        backgroundColor: line.bgColor,
+        fontWeight: line.bold ? 700 : 400,
+      }}
+    >
+      {line.isInput && <span className="text-amber-500 mr-1 select-none font-bold">&gt;</span>}
+      <span className="whitespace-pre-wrap break-words">{line.text}</span>
+    </div>
+  );
+});
+TerminalLineItem.displayName = 'TerminalLineItem';
+
+// Single stream view pane with independent scroll and buffer
+interface StreamPaneProps {
+  streamId: string;
+  title: string;
+  lines: OutputLine[];
+  themeClass: string;
+  onClear: () => void;
+  onShiftSelect: (e: React.MouseEvent) => void;
+  isSubPane?: boolean;
+}
+
+const StreamPane: React.FC<StreamPaneProps> = ({
+  streamId,
+  title,
   lines,
-  highlights,
-  macros,
-  theme,
-  onSendCommand,
-  onClearOutput,
-  onAddHighlightText,
-  onAddTriggerText,
-  onAddSubstituteText,
-  onAddAliasText,
+  themeClass,
+  onClear,
+  onShiftSelect,
+  isSubPane = false,
 }) => {
-  const [activeStream, setActiveStream] = useState<StreamId>('main');
-  const [inputValue, setInputValue] = useState('');
-  const [history, setHistory] = useState<string[]>([]);
-  const [historyIndex, setHistoryIndex] = useState<number>(-1);
-  const [selectedText, setSelectedText] = useState<string>('');
-  const [contextMenuPos, setContextMenuPos] = useState<{ x: number; y: number } | null>(null);
-  const [isAutoScroll, setIsAutoScroll] = useState(true);
-
   const scrollRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [isAutoScroll, setIsAutoScroll] = useState(true);
+  const [copied, setCopied] = useState(false);
 
-  // Filter lines by active stream
-  const filteredLines = lines.filter((line) => {
-    if (activeStream === 'raw') return true;
-    if (activeStream === 'main') return true;
-    return line.stream === activeStream;
-  });
-
-  // Auto-scroll on new lines
+  // Auto-scroll when new lines arrive in this specific window
   useEffect(() => {
     if (isAutoScroll && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [filteredLines, isAutoScroll]);
+  }, [lines.length, isAutoScroll]);
 
-  // Track scroll position to pause auto-scroll if user scrolled up
   const handleScroll = () => {
     if (!scrollRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
     const isAtBottom = scrollHeight - scrollTop - clientHeight < 40;
     setIsAutoScroll(isAtBottom);
   };
+
+  const handleCopyText = () => {
+    const fullText = lines.map((l) => l.text).join('\n');
+    navigator.clipboard.writeText(fullText);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  return (
+    <div className={`flex-1 flex flex-col h-full relative overflow-hidden ${isSubPane ? 'border-l border-stone-800' : ''}`}>
+      {/* Pane Header (for sub-panes or docked windows) */}
+      {isSubPane && (
+        <div className="bg-stone-900/90 border-b border-stone-800 px-3 py-1 flex items-center justify-between text-xs select-none">
+          <div className="flex items-center space-x-1.5 font-medium text-stone-300">
+            {getStreamIcon(streamId)}
+            <span>{title}</span>
+            <span className="text-[10px] text-stone-500 font-mono">({lines.length} lines)</span>
+          </div>
+          <div className="flex items-center space-x-1">
+            <button
+              onClick={handleCopyText}
+              title="Copy pane text"
+              className="p-1 rounded text-stone-400 hover:text-stone-200 hover:bg-stone-800 transition-colors"
+            >
+              {copied ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
+            </button>
+            <button
+              onClick={onClear}
+              title="Clear this window"
+              className="p-1 rounded text-stone-400 hover:text-rose-400 hover:bg-stone-800 transition-colors"
+            >
+              <Trash2 className="w-3 h-3" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Output Content Area */}
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        onMouseUp={onShiftSelect}
+        className={`flex-1 overflow-y-auto p-3 font-mono text-sm leading-relaxed space-y-0.5 select-text ${themeClass}`}
+      >
+        {lines.map((line) => (
+          <TerminalLineItem key={line.id} line={line} />
+        ))}
+
+        {lines.length === 0 && (
+          <div className="text-stone-500 text-center italic py-12 select-none">
+            {streamId === 'main'
+              ? "Terminal ready. Type 'look', 'inv', 'spells', or 'help' to begin."
+              : `Window [${title}] is active and listening for live game streams.`}
+          </div>
+        )}
+      </div>
+
+      {/* Scroll to Bottom Button */}
+      {!isAutoScroll && (
+        <button
+          onClick={() => {
+            setIsAutoScroll(true);
+            if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+          }}
+          className="absolute bottom-3 right-3 bg-amber-600/95 text-stone-950 font-bold px-2 py-1 rounded-full shadow-lg text-xs flex items-center gap-1 hover:bg-amber-500 transition-all z-10 select-none cursor-pointer"
+        >
+          <ArrowDown className="w-3 h-3" />
+          <span>Latest</span>
+        </button>
+      )}
+    </div>
+  );
+};
+
+// Isolated Command Line Input: 0ms Typing Latency, Never re-renders buffer!
+interface TerminalInputBarProps {
+  onSendCommand: (cmd: string) => void;
+  macros: MacroRule[];
+}
+
+const TerminalInputBar: React.FC<TerminalInputBarProps> = ({ onSendCommand, macros }) => {
+  const [inputValue, setInputValue] = useState('');
+  const [history, setHistory] = useState<string[]>([]);
+  const [historyIndex, setHistoryIndex] = useState<number>(-1);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const handleSend = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -87,7 +228,6 @@ export const TerminalWindow: React.FC<TerminalWindowProps> = ({
     setInputValue('');
   };
 
-  // Keyboard navigation for history (Up/Down) & Macros
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'ArrowUp') {
       e.preventDefault();
@@ -107,7 +247,6 @@ export const TerminalWindow: React.FC<TerminalWindowProps> = ({
         setInputValue(history[nextIndex]);
       }
     } else if (e.key.startsWith('F') && !e.ctrlKey && !e.altKey) {
-      // Check Macro
       const matchedMacro = macros.find((m) => m.key.toLowerCase() === e.key.toLowerCase());
       if (matchedMacro) {
         e.preventDefault();
@@ -116,7 +255,60 @@ export const TerminalWindow: React.FC<TerminalWindowProps> = ({
     }
   };
 
-  // Shift+Select detection for Genie Remix context menu
+  return (
+    <form
+      id="genie-input-form"
+      onSubmit={handleSend}
+      className="bg-stone-900/95 border-t border-stone-800 p-2 flex items-center space-x-2 select-none"
+    >
+      <span className="font-mono text-amber-400 font-bold text-sm pl-1">&gt;</span>
+      <input
+        ref={inputRef}
+        id="cmd-input"
+        type="text"
+        value={inputValue}
+        onChange={(e) => setInputValue(e.target.value)}
+        onKeyDown={handleKeyDown}
+        placeholder="Enter DragonRealms or #command (e.g. look, inv, prep, forage, #goto 5)..."
+        className="flex-1 bg-stone-950 border border-stone-700 rounded px-3 py-1.5 text-stone-100 font-mono text-sm focus:outline-none focus:border-amber-500 transition-colors"
+        autoFocus
+      />
+      <button
+        id="btn-send-cmd"
+        type="submit"
+        className="bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold px-3 py-1.5 rounded flex items-center space-x-1 text-xs transition-colors cursor-pointer"
+      >
+        <Send className="w-3.5 h-3.5" />
+        <span className="hidden sm:inline">Send</span>
+      </button>
+    </form>
+  );
+};
+
+export const TerminalWindow: React.FC<TerminalWindowProps> = ({
+  windowBuffers,
+  windowConfigs,
+  activeStream,
+  setActiveStream,
+  macros,
+  theme,
+  onSendCommand,
+  onClearOutput,
+  onAddHighlightText,
+  onAddTriggerText,
+  onAddSubstituteText,
+  onAddAliasText,
+  echoStreamsToMain,
+  onToggleEchoStreams,
+}) => {
+  const [selectedText, setSelectedText] = useState<string>('');
+  const [contextMenuPos, setContextMenuPos] = useState<{ x: number; y: number } | null>(null);
+
+  // Multi-window docking state (classic Genie split screen)
+  const [isSplitMode, setIsSplitMode] = useState(false);
+  const [dockedStream, setDockedStream] = useState<string>('combat');
+
+  // Shift+Select detection for quick-add context menu
   const handleMouseUp = (e: React.MouseEvent) => {
     const selection = window.getSelection()?.toString().trim();
     if (selection && e.shiftKey) {
@@ -127,7 +319,7 @@ export const TerminalWindow: React.FC<TerminalWindowProps> = ({
     }
   };
 
-  // Theme-specific colors
+  // Theme-specific CSS classes
   const getThemeClass = () => {
     switch (theme) {
       case 'amber':
@@ -144,83 +336,110 @@ export const TerminalWindow: React.FC<TerminalWindowProps> = ({
     }
   };
 
+  const themeClass = getThemeClass();
+  const activeConfig = windowConfigs.find((c) => c.id === activeStream) || {
+    id: activeStream,
+    title: activeStream.charAt(0).toUpperCase() + activeStream.slice(1),
+    unreadCount: 0,
+  };
+  const activeLines = windowBuffers[activeStream] || [];
+  const dockedLines = windowBuffers[dockedStream] || [];
+  const dockedConfig = windowConfigs.find((c) => c.id === dockedStream) || {
+    id: dockedStream,
+    title: dockedStream.charAt(0).toUpperCase() + dockedStream.slice(1),
+    unreadCount: 0,
+  };
+
   return (
     <div
       id="terminal-window"
       className="flex-1 flex flex-col h-full bg-stone-950 text-stone-200 relative overflow-hidden"
     >
-      {/* Stream Selector Bar */}
-      <div className="bg-stone-900/90 border-b border-stone-800 px-3 py-1 flex items-center justify-between text-xs select-none">
-        <div className="flex items-center space-x-1">
-          <button
-            onClick={() => setActiveStream('main')}
-            className={`flex items-center space-x-1 px-2 py-0.5 rounded text-xs transition-colors ${
-              activeStream === 'main'
-                ? 'bg-amber-600/30 text-amber-300 font-semibold border border-amber-600/50'
-                : 'text-stone-400 hover:text-stone-200 hover:bg-stone-800'
-            }`}
-          >
-            <Layers className="w-3 h-3" />
-            <span>Main</span>
-          </button>
+      {/* Stream Tabs Bar with Live Unread Badges */}
+      <div className="bg-stone-900/95 border-b border-stone-800 px-2 py-1 flex items-center justify-between text-xs select-none overflow-x-auto gap-2">
+        <div className="flex items-center space-x-1 overflow-x-auto py-0.5">
+          {windowConfigs.map((cfg) => {
+            const isActive = activeStream === cfg.id;
+            const hasUnread = cfg.unreadCount > 0;
 
-          <button
-            onClick={() => setActiveStream('combat')}
-            className={`flex items-center space-x-1 px-2 py-0.5 rounded text-xs transition-colors ${
-              activeStream === 'combat'
-                ? 'bg-red-900/40 text-red-300 font-semibold border border-red-700/50'
-                : 'text-stone-400 hover:text-stone-200 hover:bg-stone-800'
-            }`}
-          >
-            <Swords className="w-3 h-3 text-red-400" />
-            <span>Combat</span>
-          </button>
+            return (
+              <button
+                key={cfg.id}
+                id={`tab-stream-${cfg.id}`}
+                onClick={() => setActiveStream(cfg.id)}
+                className={`flex items-center space-x-1 px-2.5 py-1 rounded text-xs transition-all whitespace-nowrap relative ${
+                  isActive
+                    ? 'bg-stone-800 text-amber-300 font-semibold border border-amber-500/50 shadow-sm'
+                    : 'text-stone-400 hover:text-stone-200 hover:bg-stone-800/80 border border-transparent'
+                }`}
+              >
+                {getStreamIcon(cfg.id)}
+                <span>{cfg.title}</span>
 
-          <button
-            onClick={() => setActiveStream('speech')}
-            className={`flex items-center space-x-1 px-2 py-0.5 rounded text-xs transition-colors ${
-              activeStream === 'speech'
-                ? 'bg-sky-900/40 text-sky-300 font-semibold border border-sky-700/50'
-                : 'text-stone-400 hover:text-stone-200 hover:bg-stone-800'
-            }`}
-          >
-            <MessageSquare className="w-3 h-3 text-sky-400" />
-            <span>Speech</span>
-          </button>
-
-          <button
-            onClick={() => setActiveStream('thoughts')}
-            className={`flex items-center space-x-1 px-2 py-0.5 rounded text-xs transition-colors ${
-              activeStream === 'thoughts'
-                ? 'bg-purple-900/40 text-purple-300 font-semibold border border-purple-700/50'
-                : 'text-stone-400 hover:text-stone-200 hover:bg-stone-800'
-            }`}
-          >
-            <Sparkles className="w-3 h-3 text-purple-400" />
-            <span>Thoughts</span>
-          </button>
-
-          <button
-            onClick={() => setActiveStream('raw')}
-            className={`flex items-center space-x-1 px-2 py-0.5 rounded text-xs transition-colors ${
-              activeStream === 'raw'
-                ? 'bg-stone-800 text-stone-200 font-semibold border border-stone-600'
-                : 'text-stone-400 hover:text-stone-200 hover:bg-stone-800'
-            }`}
-          >
-            <span>Raw XML</span>
-          </button>
+                {/* Live Unread Badge for Non-Active Windows */}
+                {hasUnread && !isActive && (
+                  <span className="ml-1 px-1.5 py-0.2 rounded-full bg-red-600 text-white font-bold text-[10px] animate-pulse">
+                    {cfg.unreadCount > 99 ? '99+' : cfg.unreadCount}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
 
-        {/* Action Controls */}
-        <div className="flex items-center space-x-2">
-          <span className="text-[11px] text-stone-500 hidden sm:inline">
-            Shift+Select text to configure
-          </span>
+        {/* View & Split Controls */}
+        <div className="flex items-center space-x-2 pl-2 border-l border-stone-800 whitespace-nowrap">
+          {/* Toggle Echo to Main */}
+          <button
+            onClick={onToggleEchoStreams}
+            title={echoStreamsToMain ? 'Streams also echo into Main window (Click to isolate)' : 'Streams isolated to own windows (Click to echo to Main)'}
+            className={`px-2 py-0.5 rounded text-[11px] font-mono transition-colors ${
+              echoStreamsToMain
+                ? 'bg-stone-800 text-amber-400 border border-amber-600/40'
+                : 'bg-stone-900 text-stone-400 hover:text-stone-200 border border-stone-700'
+            }`}
+          >
+            Echo: {echoStreamsToMain ? 'ON' : 'OFF'}
+          </button>
+
+          {/* Toggle Split/Docked View */}
+          <button
+            id="btn-toggle-split"
+            onClick={() => setIsSplitMode(!isSplitMode)}
+            title={isSplitMode ? 'Switch to single window view' : 'Split screen (Dock Combat/Spells alongside Main)'}
+            className={`flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] transition-colors ${
+              isSplitMode
+                ? 'bg-amber-600/30 text-amber-300 font-semibold border border-amber-500/50'
+                : 'text-stone-400 hover:text-stone-200 hover:bg-stone-800 border border-transparent'
+            }`}
+          >
+            <Columns className="w-3 h-3" />
+            <span className="hidden md:inline">{isSplitMode ? 'Single' : 'Split'}</span>
+          </button>
+
+          {/* Dock Target Selector when Split Mode is Active */}
+          {isSplitMode && (
+            <select
+              value={dockedStream}
+              onChange={(e) => setDockedStream(e.target.value)}
+              className="bg-stone-950 border border-stone-700 text-stone-300 text-[11px] rounded px-1.5 py-0.5 focus:outline-none"
+            >
+              <option value="combat">Dock: Combat</option>
+              <option value="room">Dock: Room</option>
+              <option value="inv">Dock: Inventory</option>
+              <option value="activespells">Dock: Spells</option>
+              <option value="speech">Dock: Speech</option>
+              <option value="thoughts">Dock: Thoughts</option>
+              <option value="familiar">Dock: Familiar</option>
+              <option value="raw">Dock: Raw XML</option>
+            </select>
+          )}
+
+          {/* Clear Current Window Button */}
           <button
             id="btn-clear-terminal"
-            onClick={onClearOutput}
-            title="Clear output buffer"
+            onClick={() => onClearOutput(activeStream)}
+            title={`Clear ${activeConfig.title} window buffer`}
             className="p-1 rounded text-stone-400 hover:text-rose-400 hover:bg-stone-800 transition-colors"
           >
             <Trash2 className="w-3.5 h-3.5" />
@@ -228,67 +447,41 @@ export const TerminalWindow: React.FC<TerminalWindowProps> = ({
         </div>
       </div>
 
-      {/* Main Terminal Output Buffer */}
-      <div
-        ref={scrollRef}
-        onScroll={handleScroll}
-        onMouseUp={handleMouseUp}
-        className={`flex-1 overflow-y-auto p-3 font-mono text-sm leading-relaxed space-y-0.5 ${getThemeClass()}`}
-      >
-        {filteredLines.map((line) => {
-          const highlight = applyHighlights(line, highlights);
-          const customColor = highlight.color || line.color;
-          const customBg = highlight.bgColor || line.bgColor;
-          const isBold = highlight.bold || line.bold;
+      {/* Main Terminal Output Buffer: Single View or Split View */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Primary Window Pane */}
+        <StreamPane
+          streamId={activeStream}
+          title={activeConfig.title}
+          lines={activeLines}
+          themeClass={themeClass}
+          onClear={() => onClearOutput(activeStream)}
+          onShiftSelect={handleMouseUp}
+        />
 
-          return (
-            <div
-              key={line.id}
-              className={`transition-opacity duration-150 ${
-                line.isInput ? 'text-amber-300 pl-2 border-l-2 border-amber-600' : ''
-              } ${line.isSystem ? 'text-stone-500 text-xs italic' : ''}`}
-              style={{
-                color: customColor,
-                backgroundColor: customBg,
-                fontWeight: isBold ? 700 : 400,
-              }}
-            >
-              {line.isInput && <span className="text-amber-500 mr-1 select-none">&gt;</span>}
-              <span>{line.text}</span>
-            </div>
-          );
-        })}
-
-        {filteredLines.length === 0 && (
-          <div className="text-stone-500 text-center italic py-8">
-            Terminal ready. Type &apos;look&apos; or &apos;help&apos; to begin.
-          </div>
+        {/* Secondary Docked Window Pane (if Split Mode enabled) */}
+        {isSplitMode && (
+          <StreamPane
+            streamId={dockedStream}
+            title={dockedConfig.title}
+            lines={dockedLines}
+            themeClass={themeClass}
+            onClear={() => onClearOutput(dockedStream)}
+            onShiftSelect={handleMouseUp}
+            isSubPane={true}
+          />
         )}
       </div>
 
-      {/* Scroll to Bottom Indicator */}
-      {!isAutoScroll && (
-        <button
-          onClick={() => {
-            setIsAutoScroll(true);
-            if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-          }}
-          className="absolute bottom-14 right-4 bg-amber-600/90 text-stone-950 font-bold px-2 py-1 rounded-full shadow-lg text-xs flex items-center gap-1 hover:bg-amber-500 transition-all z-10"
-        >
-          <ArrowDown className="w-3 h-3" />
-          <span>Latest Output</span>
-        </button>
-      )}
-
-      {/* Shift+Select Context Menu (Genie Remix Feature) */}
+      {/* Shift+Select Context Menu */}
       {contextMenuPos && selectedText && (
         <div
-          className="fixed z-50 bg-stone-900 border border-stone-700 text-stone-200 text-xs rounded-lg shadow-xl p-1 w-52"
+          className="fixed z-50 bg-stone-900 border border-stone-700 text-stone-200 text-xs rounded-lg shadow-2xl p-1 w-52 select-none"
           style={{ top: contextMenuPos.y, left: contextMenuPos.x }}
           onClick={(e) => e.stopPropagation()}
         >
           <div className="px-2 py-1 border-b border-stone-800 text-[11px] font-semibold text-amber-400 truncate">
-            Send &quot;{selectedText}&quot; to:
+            Add rule for &quot;{selectedText}&quot;:
           </div>
           <button
             className="w-full text-left px-2 py-1 hover:bg-stone-800 rounded text-stone-300 hover:text-white"
@@ -336,7 +529,7 @@ export const TerminalWindow: React.FC<TerminalWindowProps> = ({
           <button
             key={m.id}
             onClick={() => onSendCommand(m.command)}
-            className="bg-stone-800 hover:bg-stone-700 text-stone-300 px-1.5 py-0.5 rounded border border-stone-700 font-mono transition-colors whitespace-nowrap"
+            className="bg-stone-800 hover:bg-stone-700 text-stone-300 px-1.5 py-0.5 rounded border border-stone-700 font-mono transition-colors whitespace-nowrap cursor-pointer"
             title={`${m.key}: ${m.command}`}
           >
             <span className="text-amber-400 font-bold">{m.key}</span> {m.command}
@@ -344,33 +537,8 @@ export const TerminalWindow: React.FC<TerminalWindowProps> = ({
         ))}
       </div>
 
-      {/* Input Form */}
-      <form
-        id="genie-input-form"
-        onSubmit={handleSend}
-        className="bg-stone-900/95 border-t border-stone-800 p-2 flex items-center space-x-2"
-      >
-        <span className="font-mono text-amber-400 font-bold text-sm pl-1 select-none">&gt;</span>
-        <input
-          ref={inputRef}
-          id="cmd-input"
-          type="text"
-          value={inputValue}
-          onChange={(e) => setInputValue(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="Enter DragonRealms or #command (e.g. look, forage, prep, #goto 5)..."
-          className="flex-1 bg-stone-950 border border-stone-700 rounded px-3 py-1.5 text-stone-100 font-mono text-sm focus:outline-none focus:border-amber-500 transition-colors"
-          autoFocus
-        />
-        <button
-          id="btn-send-cmd"
-          type="submit"
-          className="bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold px-3 py-1.5 rounded flex items-center space-x-1 text-xs transition-colors cursor-pointer"
-        >
-          <Send className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">Send</span>
-        </button>
-      </form>
+      {/* Fully Decoupled Command Input Bar (Zero Typing Lag!) */}
+      <TerminalInputBar onSendCommand={onSendCommand} macros={macros} />
     </div>
   );
 };
