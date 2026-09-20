@@ -1,4 +1,5 @@
-﻿using System;
+using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 
 namespace GenieClient
@@ -49,8 +50,14 @@ namespace GenieClient
 
         public const int WM_USER = 0x400;
         public const int EM_SETEVENTMASK = WM_USER + 69;
-        private static int UpdatingCount = 0;
-        private static int EventMaskOld = 0;
+
+        [DllImport("user32.dll")]
+        public static extern bool InvalidateRect(IntPtr hWnd, IntPtr lpRect, bool bErase);
+
+        private static readonly Dictionary<IntPtr, int> s_updatingCounts = new Dictionary<IntPtr, int>();
+        private static readonly Dictionary<IntPtr, int> s_eventMasks = new Dictionary<IntPtr, int>();
+        private static readonly object s_lock = new object();
+
         private SCROLLINFO sc = new SCROLLINFO();
         private const int SBS_HORZ = 0;
         private const int SBS_VERT = 1;
@@ -89,26 +96,79 @@ namespace GenieClient
 
         public static void BeginUpdate(IntPtr hwnd)
         {
-            UpdatingCount += 1;
-            if (UpdatingCount > 1)
+            if (hwnd == IntPtr.Zero)
             {
                 return;
             }
 
-            EventMaskOld = (int)SendMessage(hwnd, EM_SETEVENTMASK, 1, 0);
-            SendMessage(hwnd, WM_SETREDRAW, 0, 0);
+            lock (s_lock)
+            {
+                int count = 0;
+                s_updatingCounts.TryGetValue(hwnd, out count);
+                count += 1;
+                s_updatingCounts[hwnd] = count;
+
+                if (count == 1)
+                {
+                    int oldMask = (int)SendMessage(hwnd, EM_SETEVENTMASK, 1, 0);
+                    s_eventMasks[hwnd] = oldMask;
+                    SendMessage(hwnd, WM_SETREDRAW, 0, 0);
+                }
+            }
         }
 
         public static void EndUpdate(IntPtr hwnd)
         {
-            UpdatingCount -= 1;
-            if (UpdatingCount < 0)
+            if (hwnd == IntPtr.Zero)
             {
                 return;
             }
 
+            lock (s_lock)
+            {
+                int count = 0;
+                if (!s_updatingCounts.TryGetValue(hwnd, out count) || count <= 0)
+                {
+                    s_updatingCounts[hwnd] = 0;
+                    SendMessage(hwnd, WM_SETREDRAW, 1, 0);
+                    InvalidateRect(hwnd, IntPtr.Zero, true);
+                    return;
+                }
+
+                count -= 1;
+                s_updatingCounts[hwnd] = count;
+
+                if (count == 0)
+                {
+                    s_updatingCounts.Remove(hwnd);
+                    int oldMask = 0;
+                    if (s_eventMasks.TryGetValue(hwnd, out oldMask))
+                    {
+                        s_eventMasks.Remove(hwnd);
+                    }
+
+                    SendMessage(hwnd, WM_SETREDRAW, 1, 0);
+                    SendMessage(hwnd, EM_SETEVENTMASK, 0, oldMask);
+                    InvalidateRect(hwnd, IntPtr.Zero, true);
+                }
+            }
+        }
+
+        public static void ForceRedraw(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero)
+            {
+                return;
+            }
+
+            lock (s_lock)
+            {
+                s_updatingCounts.Remove(hwnd);
+                s_eventMasks.Remove(hwnd);
+            }
+
             SendMessage(hwnd, WM_SETREDRAW, 1, 0);
-            SendMessage(hwnd, EM_SETEVENTMASK, 0, EventMaskOld);
+            InvalidateRect(hwnd, IntPtr.Zero, true);
         }
 
         // Skinning

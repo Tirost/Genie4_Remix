@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.ComponentModel;
 using System.Drawing;
 using System.Runtime.InteropServices;
@@ -699,6 +699,10 @@ namespace GenieClient
         {
             PanelContents.Visible = true;
             RichTextBoxOutput.Visible = true;
+            if (RichTextBoxOutput.IsHandleCreated)
+            {
+                Win32Utility.ForceRedraw(RichTextBoxOutput.Handle);
+            }
         }
 
         private void ClearToolStripMenuItem_Click(object sender, EventArgs e)

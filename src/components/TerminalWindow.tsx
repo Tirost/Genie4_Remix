@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, memo } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect, memo } from 'react';
 import {
   OutputLine,
   HighlightRule,
@@ -25,6 +25,7 @@ import {
   Maximize2,
   Copy,
   Check,
+  GraduationCap,
 } from 'lucide-react';
 
 interface TerminalWindowProps {
@@ -56,6 +57,8 @@ const getStreamIcon = (id: string) => {
       return <Sparkles className="w-3 h-3 text-purple-400" />;
     case 'room':
       return <Eye className="w-3 h-3 text-emerald-400" />;
+    case 'experience':
+      return <GraduationCap className="w-3 h-3 text-amber-400" />;
     case 'inv':
       return <Package className="w-3 h-3 text-amber-400" />;
     case 'activespells':
@@ -74,11 +77,11 @@ const getStreamIcon = (id: string) => {
   }
 };
 
-// Memoized individual terminal output line: Renders in O(1) time with 0 regex evaluation!
+// Memoized individual terminal output line: Renders in O(1) time with 0 regex evaluation and zero animation flicker
 const TerminalLineItem = memo(({ line }: { line: OutputLine }) => {
   return (
     <div
-      className={`transition-opacity duration-75 select-text ${
+      className={`select-text ${
         line.isInput ? 'text-amber-300 pl-2 border-l-2 border-amber-600 my-0.5' : ''
       } ${line.isSystem ? 'text-stone-500 text-xs italic' : ''}`}
       style={{
@@ -117,18 +120,23 @@ const StreamPane: React.FC<StreamPaneProps> = ({
   const scrollRef = useRef<HTMLDivElement>(null);
   const [isAutoScroll, setIsAutoScroll] = useState(true);
   const [copied, setCopied] = useState(false);
+  const savedScrollTopRef = useRef<number>(0);
 
-  // Auto-scroll when new lines arrive in this specific window
-  useEffect(() => {
-    if (isAutoScroll && scrollRef.current) {
+  // Preserve scroll position when scrolled back to eliminate scroll flicker when new lines arrive
+  useLayoutEffect(() => {
+    if (!scrollRef.current) return;
+    if (isAutoScroll) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    } else {
+      scrollRef.current.scrollTop = savedScrollTopRef.current;
     }
-  }, [lines.length, isAutoScroll]);
+  }, [lines, isAutoScroll]);
 
   const handleScroll = () => {
     if (!scrollRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
-    const isAtBottom = scrollHeight - scrollTop - clientHeight < 40;
+    savedScrollTopRef.current = scrollTop;
+    const isAtBottom = scrollHeight - scrollTop - clientHeight < 30;
     setIsAutoScroll(isAtBottom);
   };
 

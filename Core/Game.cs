@@ -968,7 +968,7 @@ namespace GenieClient.Genie
 
         public void SetBufferEnd()
         {
-            if (Monitor.TryEnter(m_oThreadLock))
+            if (Monitor.TryEnter(m_oThreadLock, 1000))
             {
                 try
                 {
@@ -993,7 +993,7 @@ namespace GenieClient.Genie
 
         public void UpdateRoom()
         {
-            if (Monitor.TryEnter(m_oThreadLock))
+            if (Monitor.TryEnter(m_oThreadLock, 1000))
             {
                 try
                 {
@@ -1806,6 +1806,8 @@ namespace GenieClient.Genie
                                         m_oGlobals.VariableList.Add(argkey8, argvalue6, Globals.Variables.VariableType.Reserved);
                                         string argsVariable6 = "$roomexits";
                                         VariableChanged(argsVariable6);
+                                        m_bUpdatingRoom = false;
+                                        m_bUpdateRoomOnStreamEnd = false;
                                         UpdateRoom();
                                         break;
                                     }

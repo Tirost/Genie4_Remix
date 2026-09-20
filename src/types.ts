@@ -61,6 +61,7 @@ export type StreamId =
   | 'thoughts'
   | 'inv'
   | 'room'
+  | 'experience'
   | 'activespells'
   | 'familiar'
   | 'death'

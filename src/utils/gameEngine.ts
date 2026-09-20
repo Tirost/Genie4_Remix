@@ -184,6 +184,12 @@ export function processCommand(
         color: '#38bdf8',
         bold: true,
       });
+      sendOutput({
+        text: `[${nextRoom.name}]`,
+        stream: 'room',
+        color: '#f59e0b',
+        bold: true,
+      });
 
       if (nextRoom.desc) {
         sendOutput({
@@ -191,12 +197,22 @@ export function processCommand(
           stream: 'main',
           color: '#d4d4d4',
         });
+        sendOutput({
+          text: nextRoom.desc,
+          stream: 'room',
+          color: '#93c5fd',
+        });
       }
 
       const exitStr = nextRoom.exits.map((e) => e.dir).join(', ');
       sendOutput({
         text: `[Obvious paths: ${exitStr}]`,
         stream: 'main',
+        color: '#facc15',
+      });
+      sendOutput({
+        text: `[Obvious paths: ${exitStr}]`,
+        stream: 'room',
         color: '#facc15',
       });
 
@@ -221,11 +237,22 @@ export function processCommand(
         color: '#38bdf8',
         bold: true,
       });
+      sendOutput({
+        text: `[${currentRoom.name}]`,
+        stream: 'room',
+        color: '#f59e0b',
+        bold: true,
+      });
       if (currentRoom.desc) {
         sendOutput({
           text: currentRoom.desc,
           stream: 'main',
           color: '#d4d4d4',
+        });
+        sendOutput({
+          text: currentRoom.desc,
+          stream: 'room',
+          color: '#93c5fd',
         });
       }
       const exitStr = currentRoom.exits.map((e) => e.dir).join(', ');
@@ -234,11 +261,21 @@ export function processCommand(
         stream: 'main',
         color: '#facc15',
       });
+      sendOutput({
+        text: `[Obvious paths: ${exitStr}]`,
+        stream: 'room',
+        color: '#facc15',
+      });
       const items = state.roomItems[currentRoom.id] || [];
       if (items.length > 0) {
         sendOutput({
           text: `You also see: ${items.join(', ')}.`,
           stream: 'main',
+          color: '#4ade80',
+        });
+        sendOutput({
+          text: `You also see: ${items.join(', ')}.`,
+          stream: 'room',
           color: '#4ade80',
         });
       }
@@ -563,31 +600,27 @@ export function processCommand(
     case 'exp':
     case 'skills':
     case 'experience': {
-      sendOutput({
-        text: `Skill Experience Overview:`,
-        stream: 'main',
-        color: '#38bdf8',
-        bold: true,
-      });
-      sendOutput({
-        text: `  Shield Usage:       142 62% mind lock      Parry Ability:      138 31% clear`,
-        stream: 'main',
-        color: '#e2e8f0',
-      });
-      sendOutput({
-        text: `  Heavy Thrown:       112 18% fluid          Attunement:         125 54% focused`,
-        stream: 'main',
-        color: '#e2e8f0',
-      });
-      sendOutput({
-        text: `  Targeted Magic:     130 40% learning       Sorcery:             88 05% clear`,
-        stream: 'main',
-        color: '#e2e8f0',
-      });
-      sendOutput({
-        text: `Overall Mind State: clear (0/34 pool)`,
-        stream: 'main',
-        color: '#22c55e',
+      const expLines = [
+        { text: `Skill Experience Overview:`, color: '#38bdf8', bold: true },
+        { text: `  Shield Usage:       142 62% mind lock      Parry Ability:      138 31% clear`, color: '#e2e8f0', bold: false },
+        { text: `  Heavy Thrown:       112 18% fluid          Attunement:         125 54% focused`, color: '#e2e8f0', bold: false },
+        { text: `  Targeted Magic:     130 40% learning       Sorcery:             88 05% clear`, color: '#e2e8f0', bold: false },
+        { text: `Overall Mind State: clear (0/34 pool)`, color: '#22c55e', bold: false },
+      ];
+
+      expLines.forEach((item) => {
+        sendOutput({
+          text: item.text,
+          stream: 'main',
+          color: item.color,
+          bold: item.bold,
+        });
+        sendOutput({
+          text: item.text,
+          stream: 'experience',
+          color: item.color,
+          bold: item.bold,
+        });
       });
       break;
     }

@@ -1590,6 +1590,16 @@ namespace GenieClient
         private void FormMain_Activated(object sender, EventArgs e)
         {
             TextBoxInput.Focus();
+            if (m_oFormList != null)
+            {
+                foreach (FormSkin formSkin in m_oFormList)
+                {
+                    if (formSkin != null && formSkin.Visible && formSkin.RichTextBoxOutput != null && formSkin.RichTextBoxOutput.IsHandleCreated)
+                    {
+                        Win32Utility.ForceRedraw(formSkin.RichTextBoxOutput.Handle);
+                    }
+                }
+            }
         }
 
         // How long to wait for the game to drop the connection after we send "quit" before
@@ -5184,8 +5194,7 @@ namespace GenieClient
 
                     case Genie.Game.WindowTarget.Room:
                         {
-                            if (!Information.IsNothing(m_oOutputRoom) && m_oOutputRoom.Visible == true)
-                                oFormTarget = m_oOutputRoom;
+                            oFormTarget = m_oOutputRoom;
                             break;
                         }
 
@@ -5216,7 +5225,7 @@ namespace GenieClient
                         }
                     case Genie.Game.WindowTarget.Other:
                         {
-                            oFormTarget = FindSkinFormByName(sTargetWindow);
+                            oFormTarget = FindSkinFormByIDOrName(sTargetWindow, sTargetWindow);
                             break;
                         }
 
@@ -5324,8 +5333,7 @@ namespace GenieClient
 
                     case Genie.Game.WindowTarget.Room:
                         {
-                            if (!Information.IsNothing(m_oOutputRoom) && m_oOutputRoom.Visible == true)
-                                oFormTarget = m_oOutputRoom;
+                            oFormTarget = m_oOutputRoom;
                             break;
                         }
 
@@ -5351,7 +5359,7 @@ namespace GenieClient
                         }
                     case Genie.Game.WindowTarget.Other:
                         {
-                            oFormTarget = FindSkinFormByName(sTargetWindow);
+                            oFormTarget = FindSkinFormByIDOrName(sTargetWindow, sTargetWindow);
                             break;
                         }
 
@@ -5526,22 +5534,34 @@ namespace GenieClient
         private FormSkin FindSkinFormByIDOrName(string sID, string sWindow)
         {
             FormSkin oFormSkin = null;
-            if (sID.Length > 0)
+            if (string.IsNullOrEmpty(sID) && string.IsNullOrEmpty(sWindow))
+                return null;
+
+            string sTargetId = (sID ?? "").Trim().ToLowerInvariant();
+            string sTargetWin = (sWindow ?? "").Trim().ToLowerInvariant();
+
+            if (m_oOutputMain != null &&
+                (sTargetId == (m_oOutputMain.ID ?? "").Trim().ToLowerInvariant() ||
+                 sTargetWin == (m_oOutputMain.Title ?? "").Trim().ToLowerInvariant() ||
+                 sTargetWin == (m_oOutputMain.Name ?? "").Trim().ToLowerInvariant()))
             {
-                if ((sID.ToLower() ?? "") == (m_oOutputMain.ID ?? ""))
+                return m_oOutputMain;
+            }
+
+            if (m_oFormList != null)
+            {
+                foreach (FormSkin form in m_oFormList)
                 {
-                    oFormSkin = m_oOutputMain;
-                }
-                else
-                {
-                    var oEnumerator = m_oFormList.GetEnumerator();
-                    while (oEnumerator.MoveNext())
+                    if (form == null) continue;
+                    string formId = (form.ID ?? "").Trim().ToLowerInvariant();
+                    string formTitle = (form.Title ?? "").Trim().ToLowerInvariant();
+                    string formName = (form.Name ?? "").Trim().ToLowerInvariant();
+
+                    if ((sTargetId.Length > 0 && (formId == sTargetId || formName == sTargetId || formTitle == sTargetId)) ||
+                        (sTargetWin.Length > 0 && (formTitle == sTargetWin || formId == sTargetWin || formName == sTargetWin)))
                     {
-                        if ((((FormSkin)oEnumerator.Current).ID ?? "") == (sID.ToLower().Trim() ?? "") | (((FormSkin)oEnumerator.Current).Title.ToLower() ?? "") == (sWindow.ToLower().Trim() ?? ""))
-                        {
-                            oFormSkin = (FormSkin)oEnumerator.Current;
-                            break;
-                        }
+                        oFormSkin = form;
+                        break;
                     }
                 }
             }
@@ -5551,28 +5571,7 @@ namespace GenieClient
 
         private FormSkin FindSkinFormByName(string sWindow)
         {
-            FormSkin oFormSkin = null;
-            if (sWindow.Length > 0)
-            {
-                if ((sWindow.ToLower() ?? "") == (m_oOutputMain.Name ?? ""))
-                {
-                    oFormSkin = m_oOutputMain;
-                }
-                else
-                {
-                    var oEnumerator = m_oFormList.GetEnumerator();
-                    while (oEnumerator.MoveNext())
-                    {
-                        if ((((FormSkin)oEnumerator.Current).Title.ToLower() ?? "") == (sWindow.ToLower().Trim() ?? ""))
-                        {
-                            oFormSkin = (FormSkin)oEnumerator.Current;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            return oFormSkin;
+            return FindSkinFormByIDOrName(sWindow, sWindow);
         }
 
         private void Command_EventClearWindow(string sWindow)

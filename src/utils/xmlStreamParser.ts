@@ -7,6 +7,7 @@ export const DEFAULT_STREAM_WINDOWS: StreamWindowConfig[] = [
   { id: 'speech', title: 'Speech', unreadCount: 0 },
   { id: 'thoughts', title: 'Thoughts', unreadCount: 0 },
   { id: 'room', title: 'Room', unreadCount: 0 },
+  { id: 'experience', title: 'Experience', unreadCount: 0 },
   { id: 'inv', title: 'Inventory', unreadCount: 0 },
   { id: 'activespells', title: 'Active Spells', unreadCount: 0 },
   { id: 'familiar', title: 'Familiar', unreadCount: 0 },
@@ -94,6 +95,9 @@ export class GameXmlStreamParser {
     }
     if (lower === 'inventory') {
       return 'inv';
+    }
+    if (lower === 'experience' || lower === 'exp' || lower === 'skills') {
+      return 'experience';
     }
     return lower;
   }
@@ -221,12 +225,45 @@ export class GameXmlStreamParser {
       return;
     }
 
-    // 3. clearStream: <clearStream id="inv"/>
-    if (trimmed.startsWith('clearStream')) {
+    // 3. clearStream: <clearStream id="inv"/> or <clearContainer id="room"/>
+    if (trimmed.startsWith('clearStream') || trimmed.startsWith('clearContainer')) {
       const match = tag.match(/id=['"]([^'"]+)['"]/i);
       if (match && match[1]) {
         const target = GameXmlStreamParser.normalizeStreamId(match[1]);
         this.callbacks.onClearStream(target);
+      }
+      return;
+    }
+
+    // Component XML tags (Simutronics game XML for room descriptions, exits, exp)
+    if (trimmed.startsWith('component') || trimmed.startsWith('compDef')) {
+      const match = tag.match(/id=['"]([^'"]+)['"]/i);
+      if (match && match[1]) {
+        const compId = match[1].toLowerCase();
+        if (currentBuffer.length > 0) {
+          this.emitLine(currentBuffer, this.currentStream);
+          updateBuffer('');
+        }
+        if (compId.startsWith('room')) {
+          this.streamStack.push(this.currentStream);
+          this.currentStream = 'room';
+        } else if (compId.startsWith('exp')) {
+          this.streamStack.push(this.currentStream);
+          this.currentStream = 'experience';
+        }
+      }
+      return;
+    }
+
+    if (trimmed.startsWith('/component') || trimmed.startsWith('/compDef')) {
+      if (currentBuffer.length > 0) {
+        this.emitLine(currentBuffer, this.currentStream);
+        updateBuffer('');
+      }
+      if (this.streamStack.length > 1) {
+        this.currentStream = this.streamStack.pop() || 'main';
+      } else {
+        this.currentStream = 'main';
       }
       return;
     }

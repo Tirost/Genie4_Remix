@@ -125,6 +125,15 @@ export const App: React.FC = () => {
         color: '#34d399',
       },
     ],
+    experience: [
+      {
+        id: 'init-exp1',
+        text: '[Experience Window Active] Live skill gains and experience plugin data will automatically update here.',
+        stream: 'experience',
+        timestamp: new Date().toLocaleTimeString(),
+        color: '#38bdf8',
+      },
+    ],
     inv: [
       {
         id: 'init-i1',
@@ -334,6 +343,42 @@ export const App: React.FC = () => {
     });
   }, [addOutputLine, handleClearOutput]);
 
+  // Tab focus recovery: ensure windows repaint cleanly and never stay black when returning to Genie
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        // Force state touch to trigger clean redraw across all stream windows
+        setWindowBuffers((prev) => ({ ...prev }));
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', handleVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', handleVisibility);
+    };
+  }, []);
+
+  // Autonomous Experience Plugin: sends live skill experience pulses to the Experience window
+  useEffect(() => {
+    const expInterval = setInterval(() => {
+      const skills = [
+        'Shield Usage: 142 63% mind lock',
+        'Parry Ability: 138 32% clear',
+        'Attunement: 125 55% focused',
+        'Targeted Magic: 130 41% learning',
+      ];
+      const randomSkill = skills[Math.floor(Math.random() * skills.length)];
+      addOutputLine({
+        text: `[Plugin: DR Experience Tracker] ${randomSkill} (+0.1%)`,
+        stream: 'experience',
+        color: '#38bdf8',
+      });
+    }, 45000);
+
+    return () => clearInterval(expInterval);
+  }, [addOutputLine]);
+
   // Core Command Dispatcher
   const handleCommand = useCallback(
     (rawInput: string, isAutomated = false) => {
@@ -413,6 +458,38 @@ export const App: React.FC = () => {
                 color: '#ef4444',
               });
             }
+          }
+          return;
+        }
+
+        if (cCmd === 'plugin') {
+          const pAction = parts[1]?.toLowerCase();
+          if (pAction === 'list' || !pAction) {
+            addOutputLine({
+              text: '[Genie Plugins] Active plugins: DR Experience Tracker v2.4 (Enabled), AutoMapper v3.1 (Enabled).',
+              stream: 'main',
+              color: '#38bdf8',
+            });
+            addOutputLine({
+              text: 'Skill Experience pulse: Shield Usage: 142 (62%), Parry Ability: 138 (31%), Attunement: 125 (54%).',
+              stream: 'experience',
+              color: '#38bdf8',
+            });
+          } else if (pAction === 'exp' || pAction === 'experience') {
+            addOutputLine({
+              text: '[Plugin: DR Experience Tracker] Emitting updated skill pulse to Experience window.',
+              stream: 'main',
+              color: '#22c55e',
+            });
+            const expPulses = [
+              { text: '--- DR Experience Tracker [Active Plugin Pulse] ---', color: '#38bdf8', bold: true },
+              { text: '  Shield Usage:       142 [06/34] 62% mind lock (+1.2% / min)', color: '#e2e8f0', bold: false },
+              { text: '  Parry Ability:      138 [03/34] 31% clear     (+0.8% / min)', color: '#e2e8f0', bold: false },
+              { text: '  Attunement:         125 [05/34] 54% focused   (+2.1% / min)', color: '#e2e8f0', bold: false },
+              { text: '  Targeted Magic:     130 [04/34] 40% learning  (+1.5% / min)', color: '#e2e8f0', bold: false },
+              { text: 'Overall Mind State: clear (0/34 pool) | Rate: 5.6% total TDP', color: '#22c55e', bold: false },
+            ];
+            expPulses.forEach((p) => addOutputLine({ text: p.text, stream: 'experience', color: p.color, bold: p.bold }));
           }
           return;
         }

@@ -295,6 +295,7 @@ namespace GenieClient
                 }
 
                 ClearWindow();
+                return;
             }
             else if ((sText.Trim() ?? "") == "@resume@")
             {
@@ -307,6 +308,11 @@ namespace GenieClient
                     EndUpdate();
                     m_bSuspended = false;
                 }
+                else
+                {
+                    InvokeEndUpdate();
+                }
+                return;
             }
             else
             {
@@ -398,9 +404,7 @@ namespace GenieClient
         {
             if (m_oRichTextBuffer.TextLength == 0)
             {
-                Rectangle rc = new Rectangle(this.Location.X, this.Location.Y, this.Margin.Left * 3, this.Height);
-                Invalidate(rc, true);
-                
+                Invalidate(true);
             }
         }
         public void AddText(string sText, Color oColor, Color oBgColor, bool bNoCache = true, bool bMono = false)
@@ -915,44 +919,55 @@ namespace GenieClient
                 else
                     iSelectionStart = 0;
             }
-            
-            SelectionStart = int.MaxValue;
-            SelectionLength = 0;
 
-            if (text != "")
-                SelectedRtf = text;
-
-            bool bScroll = true;
-            if (iFirstLineVisible + 2 >= m_iEndLine) // +2 extra lines
+            bool bNeedUpdateLock = m_bIsScrolling && !bIsFlushingBuffer;
+            if (bNeedUpdateLock)
             {
-                bScroll = false;
+                BeginUpdate();
             }
 
-            m_iEndLine = Win32Utility.GetFirstLineVisible((IntPtr)Handle.ToInt32());
-            if (iSelectionLength > 0)
+            try
             {
-                SelectionStart = iSelectionStart;
-                SelectionLength = iSelectionLength;
-            }
-            else if (bScroll == true) // We are scrolling
-            {
-                int i = iFirstLineVisible - m_iEndLine;
-                Win32Utility.LineScroll((IntPtr)Handle.ToInt32(), i);
-            }
+                SelectionStart = int.MaxValue;
+                SelectionLength = 0;
 
-            if (m_bIsScrolling == true | bIsFlushingBuffer == true)
-            {
-                EndUpdate();
-            }
+                if (text != "")
+                    SelectedRtf = text;
 
-            m_bIsScrolling = bScroll;
+                bool bScroll = true;
+                if (iFirstLineVisible + 2 >= m_iEndLine) // +2 extra lines
+                {
+                    bScroll = false;
+                }
+
+                m_iEndLine = Win32Utility.GetFirstLineVisible((IntPtr)Handle.ToInt32());
+                if (iSelectionLength > 0)
+                {
+                    SelectionStart = iSelectionStart;
+                    SelectionLength = iSelectionLength;
+                }
+                else if (bScroll == true) // We are scrolling
+                {
+                    int i = iFirstLineVisible - m_iEndLine;
+                    Win32Utility.LineScroll((IntPtr)Handle.ToInt32(), i);
+                }
+
+                m_bIsScrolling = bScroll;
+            }
+            finally
+            {
+                if (bIsFlushingBuffer || bNeedUpdateLock)
+                {
+                    EndUpdate();
+                }
+            }
         }
 
         public delegate void InvokeEndUpdateDelegate();
 
         private void InvokeEndUpdate()
         {
-            if (m_iPendingBufferChars == 0)
+            if (m_iPendingBufferChars == 0 && m_oRichTextBuffer.TextLength == 0)
             {
                 return;
             }
@@ -989,45 +1004,51 @@ namespace GenieClient
         {
             if (LinkList.Count > 0)
             {
-                if (m_bIsScrolling == true)
+                bool bNeedUpdateLock = m_bIsScrolling;
+                if (bNeedUpdateLock)
                 {
                     BeginUpdate();
                 }
 
-                int iFirstLineVisible = Win32Utility.GetFirstLineVisible((IntPtr)Handle.ToInt32());
-                int startPosition = SelectionStart;
-                int startLength = SelectionLength;
-                foreach (Link link in LinkList)
+                try
                 {
-                    InsertLink(link.Command, offset + link.Index, link.Length);
-                    offset += link.Command.Length + 1;
-                }
+                    int iFirstLineVisible = Win32Utility.GetFirstLineVisible((IntPtr)Handle.ToInt32());
+                    int startPosition = SelectionStart;
+                    int startLength = SelectionLength;
+                    foreach (Link link in LinkList)
+                    {
+                        InsertLink(link.Command, offset + link.Index, link.Length);
+                        offset += link.Command.Length + 1;
+                    }
 
-                LinkList.Clear();
-                bool bScroll = true;
-                if (iFirstLineVisible + 2 >= m_iEndLine)	// +2 extra lines
-                {
-                    bScroll = false;
-                }
+                    LinkList.Clear();
+                    bool bScroll = true;
+                    if (iFirstLineVisible + 2 >= m_iEndLine)	// +2 extra lines
+                    {
+                        bScroll = false;
+                    }
 
-                m_iEndLine = Win32Utility.GetFirstLineVisible((IntPtr)Handle.ToInt32());
-                if (startLength > 0)
-                {
-                    SelectionStart = startPosition;
-                    SelectionLength = startLength;
-                }
-                else if (bScroll == true) // We are scrolling
-                {
-                    int i = iFirstLineVisible - m_iEndLine;
-                    Win32Utility.LineScroll((IntPtr)Handle.ToInt32(), i);
-                }
+                    m_iEndLine = Win32Utility.GetFirstLineVisible((IntPtr)Handle.ToInt32());
+                    if (startLength > 0)
+                    {
+                        SelectionStart = startPosition;
+                        SelectionLength = startLength;
+                    }
+                    else if (bScroll == true) // We are scrolling
+                    {
+                        int i = iFirstLineVisible - m_iEndLine;
+                        Win32Utility.LineScroll((IntPtr)Handle.ToInt32(), i);
+                    }
 
-                if (m_bIsScrolling == true)
-                {
-                    EndUpdate();
+                    m_bIsScrolling = bScroll;
                 }
-
-                m_bIsScrolling = bScroll;
+                finally
+                {
+                    if (bNeedUpdateLock)
+                    {
+                        EndUpdate();
+                    }
+                }
             }
         }
 
@@ -1038,6 +1059,10 @@ namespace GenieClient
             Clear();
             m_oRichTextBuffer.Clear();
             m_bPendingNewLine = false;
+            m_iPendingBufferChars = 0;
+            m_iPendingBufferLines = 0;
+            m_iEndLine = 0;
+            m_bIsScrolling = false;
         }
 
         public void ComponentRichTextBox_GotFocus(object sender, EventArgs e)
