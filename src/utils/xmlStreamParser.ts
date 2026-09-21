@@ -42,6 +42,10 @@ export const PRESET_COLORS: Record<string, { color: string; bgColor?: string; bo
   familiar: { color: '#a7f3d0', bold: false },
   combat: { color: '#ef4444', bold: false },
   bold: { color: '#38bdf8', bold: true },
+  watching: { color: '#67e8f9', bold: false },
+  link: { color: '#38bdf8', bold: false },
+  selected: { color: '#fbbf24', bold: true },
+  chatter: { color: '#86efac', bold: false },
 };
 
 /**
@@ -55,9 +59,10 @@ export class GameXmlStreamParser {
   private callbacks: XMLParserCallbacks;
   private isBold = false;
   private activePreset: string | null = null;
+  private activeCmd: string | null = null;
   private rawMode = false;
   private pendingBatch: OutputLine[] = [];
-  private currentLineSegments: { text: string; color?: string; bgColor?: string; bold?: boolean }[] = [];
+  private currentLineSegments: { text: string; color?: string; bgColor?: string; bold?: boolean; cmd?: string }[] = [];
 
   constructor(callbacks: XMLParserCallbacks) {
     this.callbacks = callbacks;
@@ -227,6 +232,7 @@ export class GameXmlStreamParser {
             color: segColor,
             bgColor: segBgColor,
             bold: isSegmentBold,
+            cmd: this.activeCmd || undefined,
           });
         }
         if (idx < parts.length - 1) {
@@ -239,6 +245,7 @@ export class GameXmlStreamParser {
         color: segColor,
         bgColor: segBgColor,
         bold: isSegmentBold,
+        cmd: this.activeCmd || undefined,
       });
     }
   }
@@ -257,6 +264,8 @@ export class GameXmlStreamParser {
 
     const allBold = this.currentLineSegments.every((s) => s.bold);
     const hasAnyBold = this.currentLineSegments.some((s) => s.bold);
+    const hasAnyColor = this.currentLineSegments.some((s) => !!s.color);
+    const hasAnyCmd = this.currentLineSegments.some((s) => !!s.cmd);
     const hasDifferentStyles = this.currentLineSegments.length > 1;
 
     const line: OutputLine = {
@@ -267,7 +276,7 @@ export class GameXmlStreamParser {
       color: !hasDifferentStyles ? this.currentLineSegments[0].color : undefined,
       bgColor: !hasDifferentStyles ? this.currentLineSegments[0].bgColor : undefined,
       bold: allBold || this.isBold,
-      segments: hasDifferentStyles || hasAnyBold ? [...this.currentLineSegments] : undefined,
+      segments: hasDifferentStyles || hasAnyBold || hasAnyColor || hasAnyCmd ? [...this.currentLineSegments] : undefined,
     };
 
     this.pendingBatch.push(line);
@@ -398,19 +407,24 @@ export class GameXmlStreamParser {
       return;
     }
 
-    // 5. Presets: <preset id="thought">, <preset id="whisper">, </preset>
-    if (trimmed.startsWith('preset')) {
-      const match = tag.match(/id=['"]([^'"]+)['"]/i);
+    // 5. Presets: <preset id="thought">, <preset id=thought>, <preset id="whisper" />, </preset>
+    if (trimmed.toLowerCase().startsWith('preset')) {
+      const match = tag.match(/id=['"]?([^'"\s>]+)/i);
+      if (currentBuffer.length > 0) {
+        this.flushSegmentToLine(currentBuffer);
+        updateBuffer('');
+      }
       if (match && match[1]) {
-        if (currentBuffer.length > 0) {
-          this.flushSegmentToLine(currentBuffer);
-          updateBuffer('');
+        const pId = match[1].toLowerCase();
+        if (pId === 'default' || pId === '') {
+          this.activePreset = null;
+        } else {
+          this.activePreset = pId;
         }
-        this.activePreset = match[1].toLowerCase();
       }
       return;
     }
-    if (trimmed.startsWith('/preset')) {
+    if (trimmed.toLowerCase().startsWith('/preset')) {
       if (currentBuffer.length > 0) {
         this.flushSegmentToLine(currentBuffer);
         updateBuffer('');
@@ -419,8 +433,38 @@ export class GameXmlStreamParser {
       return;
     }
 
-    // 6. Bold: <pushBold/>, <popBold/>
-    if (trimmed === 'pushBold' || trimmed === 'pushBold/') {
+    // 6. Styles: <style id="roomName" />, <style id="bold" />, <style id="" />, </style>
+    if (trimmed.toLowerCase().startsWith('style')) {
+      const idMatch = tag.match(/id=['"]?([^'"\s>]*)/i);
+      if (currentBuffer.length > 0) {
+        this.flushSegmentToLine(currentBuffer);
+        updateBuffer('');
+      }
+      if (idMatch) {
+        const styleId = (idMatch[1] || '').toLowerCase();
+        if (!styleId || styleId === 'default') {
+          this.activePreset = null;
+          this.isBold = false;
+        } else if (styleId === 'bold') {
+          this.isBold = true;
+        } else {
+          this.activePreset = styleId;
+        }
+      }
+      return;
+    }
+    if (trimmed.toLowerCase() === '/style') {
+      if (currentBuffer.length > 0) {
+        this.flushSegmentToLine(currentBuffer);
+        updateBuffer('');
+      }
+      this.activePreset = null;
+      this.isBold = false;
+      return;
+    }
+
+    // 7. Bold Open: <pushBold/>, <pushBold />, <pushbold/>, <b>, <bold>
+    if (/^(pushBold|pushbold|b|bold)(\s*\/)?$/i.test(trimmed)) {
       if (currentBuffer.length > 0) {
         this.flushSegmentToLine(currentBuffer);
         updateBuffer('');
@@ -428,12 +472,35 @@ export class GameXmlStreamParser {
       this.isBold = true;
       return;
     }
-    if (trimmed === 'popBold' || trimmed === 'popBold/' || trimmed === '/pushBold') {
+
+    // 8. Bold Close: <popBold/>, <popBold />, <popbold/>, </pushBold>, </pushbold>, </b>, </bold>
+    if (/^(popBold|popbold|\/pushBold|\/pushbold|\/b|\/bold)(\s*\/)?$/i.test(trimmed)) {
       if (currentBuffer.length > 0) {
         this.flushSegmentToLine(currentBuffer);
         updateBuffer('');
       }
       this.isBold = false;
+      return;
+    }
+
+    // 9. Dynamic Links: <d cmd="look">look</d>
+    if (trimmed.toLowerCase().startsWith('d ') || trimmed.toLowerCase().startsWith('d=')) {
+      const cmdMatch = tag.match(/cmd=['"]?([^'"]+)['"]?/i);
+      if (cmdMatch && cmdMatch[1]) {
+        if (currentBuffer.length > 0) {
+          this.flushSegmentToLine(currentBuffer);
+          updateBuffer('');
+        }
+        this.activeCmd = cmdMatch[1];
+      }
+      return;
+    }
+    if (trimmed.toLowerCase() === '/d') {
+      if (currentBuffer.length > 0) {
+        this.flushSegmentToLine(currentBuffer);
+        updateBuffer('');
+      }
+      this.activeCmd = null;
       return;
     }
 

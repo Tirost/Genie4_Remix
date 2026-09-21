@@ -78,39 +78,47 @@ const getStreamIcon = (id: string) => {
 };
 
 // Memoized individual terminal output line: Renders in O(1) time with 0 regex evaluation and zero animation flicker
-const TerminalLineItem = memo(({ line }: { line: OutputLine }) => {
-  return (
-    <div
-      className={`select-text ${
-        line.isInput ? 'text-amber-300 pl-2 border-l-2 border-amber-600 my-0.5' : ''
-      } ${line.isSystem ? 'text-stone-500 text-xs italic' : ''}`}
-      style={{
-        color: line.color,
-        backgroundColor: line.bgColor,
-        fontWeight: line.bold ? 700 : 400,
-      }}
-    >
-      {line.isInput && <span className="text-amber-500 mr-1 select-none font-bold">&gt;</span>}
-      {line.segments && line.segments.length > 0 ? (
-        line.segments.map((seg, idx) => (
-          <span
-            key={idx}
-            className="whitespace-pre-wrap break-words"
-            style={{
-              color: seg.color || line.color,
-              backgroundColor: seg.bgColor || line.bgColor,
-              fontWeight: seg.bold ? 700 : (line.bold ? 700 : 400),
-            }}
-          >
-            {seg.text}
-          </span>
-        ))
-      ) : (
-        <span className="whitespace-pre-wrap break-words">{line.text}</span>
-      )}
-    </div>
-  );
-});
+const TerminalLineItem = memo(
+  ({ line, onCommandClick }: { line: OutputLine; onCommandClick?: (cmd: string) => void }) => {
+    return (
+      <div
+        className={`select-text ${
+          line.isInput ? 'text-amber-300 pl-2 border-l-2 border-amber-600 my-0.5' : ''
+        } ${line.isSystem ? 'text-stone-500 text-xs italic' : ''}`}
+        style={{
+          color: line.color,
+          backgroundColor: line.bgColor,
+          fontWeight: line.bold ? 700 : 400,
+        }}
+      >
+        {line.isInput && <span className="text-amber-500 mr-1 select-none font-bold">&gt;</span>}
+        {line.segments && line.segments.length > 0 ? (
+          line.segments.map((seg, idx) => (
+            <span
+              key={idx}
+              onClick={seg.cmd && onCommandClick ? () => onCommandClick(seg.cmd!) : undefined}
+              className={`whitespace-pre-wrap break-words ${
+                seg.cmd
+                  ? 'cursor-pointer underline decoration-dotted text-sky-400 hover:text-amber-300 transition-colors'
+                  : ''
+              }`}
+              style={{
+                color: seg.color || line.color,
+                backgroundColor: seg.bgColor || line.bgColor,
+                fontWeight: seg.bold ? 700 : line.bold ? 700 : 400,
+              }}
+              title={seg.cmd ? `Click to send command: ${seg.cmd}` : undefined}
+            >
+              {seg.text}
+            </span>
+          ))
+        ) : (
+          <span className="whitespace-pre-wrap break-words">{line.text}</span>
+        )}
+      </div>
+    );
+  }
+);
 TerminalLineItem.displayName = 'TerminalLineItem';
 
 // Single stream view pane with independent scroll and buffer
@@ -121,6 +129,7 @@ interface StreamPaneProps {
   themeClass: string;
   onClear: () => void;
   onShiftSelect: (e: React.MouseEvent) => void;
+  onSendCommand?: (cmd: string) => void;
   isSubPane?: boolean;
 }
 
@@ -131,6 +140,7 @@ const StreamPane: React.FC<StreamPaneProps> = ({
   themeClass,
   onClear,
   onShiftSelect,
+  onSendCommand,
   isSubPane = false,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -200,7 +210,7 @@ const StreamPane: React.FC<StreamPaneProps> = ({
         className={`flex-1 overflow-y-auto p-3 font-mono text-sm leading-relaxed space-y-0.5 select-text ${themeClass}`}
       >
         {lines.map((line) => (
-          <TerminalLineItem key={line.id} line={line} />
+          <TerminalLineItem key={line.id} line={line} onCommandClick={onSendCommand} />
         ))}
 
         {lines.length === 0 && (
@@ -481,6 +491,7 @@ export const TerminalWindow: React.FC<TerminalWindowProps> = ({
           themeClass={themeClass}
           onClear={() => onClearOutput(activeStream)}
           onShiftSelect={handleMouseUp}
+          onSendCommand={onSendCommand}
         />
 
         {/* Secondary Docked Window Pane (if Split Mode enabled) */}
@@ -492,6 +503,7 @@ export const TerminalWindow: React.FC<TerminalWindowProps> = ({
             themeClass={themeClass}
             onClear={() => onClearOutput(dockedStream)}
             onShiftSelect={handleMouseUp}
+            onSendCommand={onSendCommand}
             isSubPane={true}
           />
         )}

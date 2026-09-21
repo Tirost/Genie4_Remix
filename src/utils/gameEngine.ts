@@ -1,6 +1,7 @@
 import {
   CharacterStatus,
   OutputLine,
+  LineSegment,
   HighlightRule,
   TriggerRule,
   SubstituteRule,
@@ -289,6 +290,185 @@ export function applySubstitutes(text: string, substitutes: SubstituteRule[]): s
     }
   }
   return result;
+}
+
+// Apply highlights to segments, preserving XML preset/bold styling while overlaying user regex highlights
+export function applyHighlightsToLine(
+  text: string,
+  initialSegments: LineSegment[] | undefined,
+  highlights: HighlightRule[]
+): { segments?: LineSegment[]; color?: string; bgColor?: string; bold?: boolean } {
+  if (!text) {
+    return { segments: initialSegments };
+  }
+
+  // If no highlights enabled, retain initial XML segments
+  const enabledHighlights = highlights ? highlights.filter((h) => h.enabled) : [];
+  if (enabledHighlights.length === 0) {
+    return { segments: initialSegments };
+  }
+
+  // Check if any rule wants to highlight the entire line
+  const fullLineRule = enabledHighlights.find((h) => {
+    if (!h.highlightFullLine) return false;
+    const regex = getCachedRegex(h.pattern, h.isRegex, h.isCaseInsensitive);
+    if (!regex) return false;
+    regex.lastIndex = 0;
+    return regex.test(text);
+  });
+
+  if (fullLineRule) {
+    if (initialSegments && initialSegments.length > 0) {
+      const styledSegments = initialSegments.map((seg) => ({
+        ...seg,
+        color: fullLineRule.fgColor || seg.color,
+        bgColor: fullLineRule.bgColor || seg.bgColor,
+        bold: fullLineRule.bold !== undefined ? fullLineRule.bold : seg.bold,
+      }));
+      return { segments: styledSegments };
+    }
+    return {
+      color: fullLineRule.fgColor,
+      bgColor: fullLineRule.bgColor || undefined,
+      bold: fullLineRule.bold,
+    };
+  }
+
+  // Find all substring matches across the line
+  interface MatchSpan {
+    start: number;
+    end: number;
+    fgColor: string;
+    bgColor?: string;
+    bold?: boolean;
+  }
+  const matchSpans: MatchSpan[] = [];
+
+  for (const h of enabledHighlights) {
+    if (!h.pattern) continue;
+    try {
+      const flags = h.isCaseInsensitive ? 'gi' : 'g';
+      let regex: RegExp;
+      if (h.isRegex) {
+        regex = new RegExp(h.pattern, flags);
+      } else {
+        const escaped = h.pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        regex = new RegExp(escaped, flags);
+      }
+
+      let m: RegExpExecArray | null;
+      while ((m = regex.exec(text)) !== null) {
+        if (m[0].length === 0) {
+          regex.lastIndex++;
+          continue;
+        }
+        matchSpans.push({
+          start: m.index,
+          end: m.index + m[0].length,
+          fgColor: h.fgColor,
+          bgColor: h.bgColor || undefined,
+          bold: h.bold,
+        });
+      }
+    } catch {
+      // Ignore invalid regex
+    }
+  }
+
+  // If no highlights matched this line, return existing XML segments or unstyled line
+  if (matchSpans.length === 0) {
+    return { segments: initialSegments };
+  }
+
+  // Prepare baseline segments mapped to text offsets
+  const baseSegments: (LineSegment & { start: number; end: number })[] = [];
+  if (initialSegments && initialSegments.length > 0) {
+    let currOffset = 0;
+    for (const seg of initialSegments) {
+      const len = seg.text.length;
+      baseSegments.push({
+        ...seg,
+        start: currOffset,
+        end: currOffset + len,
+      });
+      currOffset += len;
+    }
+  } else {
+    baseSegments.push({
+      text,
+      start: 0,
+      end: text.length,
+    });
+  }
+
+  // Collect all slice boundary points
+  const points = new Set<number>([0, text.length]);
+  for (const seg of baseSegments) {
+    points.add(seg.start);
+    points.add(seg.end);
+  }
+  for (const m of matchSpans) {
+    if (m.start >= 0 && m.start <= text.length) points.add(m.start);
+    if (m.end >= 0 && m.end <= text.length) points.add(m.end);
+  }
+
+  const sortedPoints = Array.from(points).sort((a, b) => a - b);
+  const result: LineSegment[] = [];
+
+  for (let i = 0; i < sortedPoints.length - 1; i++) {
+    const pStart = sortedPoints[i];
+    const pEnd = sortedPoints[i + 1];
+    if (pStart >= pEnd) continue;
+
+    const sliceText = text.substring(pStart, pEnd);
+    if (!sliceText) continue;
+
+    // Find base segment styles (XML presets, bold, links, etc.)
+    const baseSeg = baseSegments.find((s) => s.start <= pStart && s.end >= pEnd);
+    let segColor = baseSeg?.color;
+    let segBgColor = baseSeg?.bgColor;
+    let segBold = baseSeg?.bold ?? false;
+    const segCmd = baseSeg?.cmd;
+
+    // Apply matched highlights to this slice (later rules override earlier rules)
+    for (const m of matchSpans) {
+      if (m.start <= pStart && m.end >= pEnd) {
+        if (m.fgColor) segColor = m.fgColor;
+        if (m.bgColor) segBgColor = m.bgColor;
+        if (m.bold !== undefined) segBold = segBold || m.bold;
+      }
+    }
+
+    result.push({
+      text: sliceText,
+      color: segColor,
+      bgColor: segBgColor,
+      bold: segBold,
+      cmd: segCmd,
+    });
+  }
+
+  // Merge adjacent segments with identical visual styling
+  const merged: LineSegment[] = [];
+  for (const seg of result) {
+    if (merged.length === 0) {
+      merged.push(seg);
+    } else {
+      const prev = merged[merged.length - 1];
+      if (
+        prev.color === seg.color &&
+        prev.bgColor === seg.bgColor &&
+        prev.bold === seg.bold &&
+        prev.cmd === seg.cmd
+      ) {
+        prev.text += seg.text;
+      } else {
+        merged.push(seg);
+      }
+    }
+  }
+
+  return { segments: merged };
 }
 
 // Compute highlights for text at ingestion time (Genie PrintTextWithParse model)

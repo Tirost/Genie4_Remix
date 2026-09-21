@@ -28,6 +28,7 @@ import {
   expandAliases,
   applySubstitutes,
   computeLineHighlights,
+  applyHighlightsToLine,
   processCommand,
   findPath,
   processTriggers,
@@ -267,20 +268,21 @@ export const App: React.FC = () => {
       const targetStream = lineData.stream || 'main';
 
       // Pre-compute highlights at ingestion time (Genie Core/Game.cs PrintTextWithParse model)
-      const hl = computeLineHighlights(processedText, currentHls);
+      const hlResult = applyHighlightsToLine(processedText, lineData.segments, currentHls);
+      const hasSegments = !!(hlResult.segments && hlResult.segments.length > 0);
 
       const newLine: OutputLine = {
         id: lineData.id || `line-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
         text: processedText,
         stream: targetStream,
         timestamp: lineData.timestamp || new Date().toLocaleTimeString(),
-        color: lineData.color || hl.color,
-        bgColor: lineData.bgColor || hl.bgColor,
-        bold: lineData.bold !== undefined ? lineData.bold : hl.bold,
+        color: hasSegments ? undefined : (lineData.color || hlResult.color),
+        bgColor: hasSegments ? undefined : (lineData.bgColor || hlResult.bgColor),
+        bold: hasSegments ? false : (lineData.bold !== undefined ? lineData.bold : hlResult.bold),
         isPrompt: lineData.isPrompt,
         isInput: lineData.isInput,
         isSystem: lineData.isSystem,
-        segments: lineData.segments,
+        segments: hlResult.segments || lineData.segments,
       };
 
       processedLines.push(newLine);

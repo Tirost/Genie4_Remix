@@ -85,6 +85,7 @@ export interface LineSegment {
   color?: string;
   bgColor?: string;
   bold?: boolean;
+  cmd?: string;
 }
 
 export interface OutputLine {
@@ -135,6 +136,7 @@ export interface HighlightRule {
   fgColor: string;
   bgColor?: string;
   bold?: boolean;
+  highlightFullLine?: boolean;
   enabled: boolean;
 }
 
