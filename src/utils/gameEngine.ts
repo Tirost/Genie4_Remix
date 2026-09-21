@@ -73,24 +73,201 @@ export function expandAliases(input: string, aliases: AliasRule[]): string {
   return trimmed;
 }
 
-// Pre-compiled regex cache to eliminate render and ingestion overhead
+// Pre-compiled regex cache to eliminate render, trigger, and ingestion overhead
 const regexCache = new Map<string, RegExp | null>();
+const MAX_REGEX_CACHE_SIZE = 1000;
 
 export function getCachedRegex(pattern: string, isRegex: boolean, isCaseInsensitive: boolean): RegExp | null {
+  if (!pattern) return null;
   const key = `${isRegex ? 'R' : 'S'}:${isCaseInsensitive ? 'I' : 'C'}:${pattern}`;
-  if (regexCache.has(key)) {
-    return regexCache.get(key) || null;
+  const existing = regexCache.get(key);
+  if (existing !== undefined) {
+    return existing;
   }
   try {
     const flags = isCaseInsensitive ? 'i' : '';
     const compiled = isRegex
       ? new RegExp(pattern, flags)
       : new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags);
+    if (regexCache.size > MAX_REGEX_CACHE_SIZE) {
+      regexCache.clear();
+    }
     regexCache.set(key, compiled);
     return compiled;
   } catch {
     regexCache.set(key, null);
     return null;
+  }
+}
+
+// System variable resolver for Genie $variables
+export function getSystemVariable(
+  name: string,
+  status?: CharacterStatus,
+  profileName?: string
+): string | undefined {
+  if (!name) return undefined;
+  const lower = name.toLowerCase();
+
+  if (lower === 'charactername' || lower === 'charname' || lower === 'name') {
+    return profileName || 'Tirost';
+  }
+
+  if (!status) return undefined;
+
+  switch (lower) {
+    case 'guild':
+      return status.guild;
+    case 'stance':
+      return status.stance;
+    case 'position':
+      return status.position;
+    case 'vitality':
+    case 'health':
+    case 'hp':
+      return status.vitality.toString();
+    case 'mana':
+      return status.mana.toString();
+    case 'innerfire':
+    case 'fire':
+      return status.innerFire.toString();
+    case 'fatigue':
+    case 'fat':
+      return status.fatigue.toString();
+    case 'spirit':
+      return status.spirit.toString();
+    case 'concentration':
+    case 'conc':
+      return status.concentration.toString();
+    case 'roundtime':
+    case 'rt':
+      return status.roundtimeRemaining.toString();
+    case 'roundtimetotal':
+      return status.roundtimeTotal.toString();
+    case 'casttime':
+      return status.castTimeRemaining.toString();
+    case 'casttimetotal':
+      return status.castTimeTotal.toString();
+    case 'castready':
+      return status.castReady ? '1' : '0';
+    case 'righthand':
+    case 'rh':
+      return status.rightHand;
+    case 'lefthand':
+    case 'lh':
+      return status.leftHand;
+    case 'preparedspell':
+    case 'spell':
+      return status.preparedSpell;
+    case 'roomname':
+    case 'roomtitle':
+      return status.roomName;
+    case 'roomdesc':
+      return status.roomDesc;
+    case 'roomexits':
+      return status.roomExits.join(', ');
+    case 'bleeding':
+      return status.isBleeding ? '1' : '0';
+    case 'poisoned':
+      return status.isPoisoned ? '1' : '0';
+    case 'diseased':
+      return status.isDiseased ? '1' : '0';
+    case 'hidden':
+      return status.isHidden ? '1' : '0';
+    default:
+      return undefined;
+  }
+}
+
+// Single-pass high performance variable substitution for Genie %local and $global variables
+export function substituteVariablesInText(
+  text: string,
+  localVars?: Record<string, string>,
+  globalVars?: Record<string, string>,
+  status?: CharacterStatus,
+  profileName?: string
+): string {
+  if (!text || (!text.includes('%') && !text.includes('$'))) {
+    return text;
+  }
+
+  return text.replace(/([%$])([a-zA-Z0-9_]+)/g, (match, prefix, varName) => {
+    const lower = varName.toLowerCase();
+
+    if (prefix === '%') {
+      // Local script variable check first
+      if (localVars && localVars[lower] !== undefined) {
+        return localVars[lower];
+      }
+      if (localVars && localVars[varName] !== undefined) {
+        return localVars[varName];
+      }
+      // Fall back to global if not in local
+      if (globalVars && globalVars[lower] !== undefined) {
+        return globalVars[lower];
+      }
+      if (globalVars && globalVars[varName] !== undefined) {
+        return globalVars[varName];
+      }
+      const sys = getSystemVariable(varName, status, profileName);
+      if (sys !== undefined) return sys;
+      return match;
+    }
+
+    if (prefix === '$') {
+      // Global variable check first
+      if (globalVars && globalVars[lower] !== undefined) {
+        return globalVars[lower];
+      }
+      if (globalVars && globalVars[varName] !== undefined) {
+        return globalVars[varName];
+      }
+      // Check system variables
+      const sys = getSystemVariable(varName, status, profileName);
+      if (sys !== undefined) return sys;
+      // Fall back to local variable
+      if (localVars && localVars[lower] !== undefined) {
+        return localVars[lower];
+      }
+      if (localVars && localVars[varName] !== undefined) {
+        return localVars[varName];
+      }
+      return match;
+    }
+
+    return match;
+  });
+}
+
+// Autonomous high-performance trigger evaluation
+export function processTriggers(
+  text: string,
+  triggers: TriggerRule[],
+  onExecute: (actionType: string, actionValue: string, matchedTrigger: TriggerRule) => void
+): void {
+  if (!text || triggers.length === 0) return;
+
+  for (let i = 0; i < triggers.length; i++) {
+    const tr = triggers[i];
+    if (!tr.enabled) continue;
+
+    const regex = getCachedRegex(tr.pattern, tr.isRegex, true);
+    if (!regex) continue;
+
+    const match = regex.exec(text);
+    if (match) {
+      let resolvedAction = tr.actionValue;
+
+      // Substitute capture groups: $0 (full match), $1, $2, ...
+      if (resolvedAction.includes('$')) {
+        resolvedAction = resolvedAction.replace(/\$([0-9]+)/g, (_, groupIndexStr) => {
+          const groupIdx = parseInt(groupIndexStr, 10);
+          return match[groupIdx] !== undefined ? match[groupIdx] : '';
+        });
+      }
+
+      onExecute(tr.actionType, resolvedAction, tr);
+    }
   }
 }
 

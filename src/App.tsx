@@ -30,6 +30,9 @@ import {
   computeLineHighlights,
   processCommand,
   findPath,
+  processTriggers,
+  getSystemVariable,
+  substituteVariablesInText,
 } from './utils/gameEngine';
 import { GameXmlStreamParser, DEFAULT_STREAM_WINDOWS } from './utils/xmlStreamParser';
 import { GenieScriptInterpreter } from './utils/scriptRunner';
@@ -183,6 +186,51 @@ export const App: React.FC = () => {
 
   const currentProfile = profiles.find((p) => p.id === activeProfileId) || profiles[0];
 
+  // High-performance synchronization refs to eliminate render cascade and stale closures
+  const triggersRef = useRef(triggers);
+  const highlightsRef = useRef(highlights);
+  const substitutesRef = useRef(substitutes);
+  const variablesRef = useRef(variables);
+  const statusRef = useRef(status);
+  const echoStreamsToMainRef = useRef(echoStreamsToMain);
+  const activeStreamRef = useRef(activeStream);
+  const currentProfileRef = useRef(currentProfile);
+  const handleCommandRef = useRef<(cmd: string, isAutomated?: boolean) => void>(() => {});
+
+  useEffect(() => { triggersRef.current = triggers; }, [triggers]);
+  useEffect(() => { highlightsRef.current = highlights; }, [highlights]);
+  useEffect(() => { substitutesRef.current = substitutes; }, [substitutes]);
+  useEffect(() => { variablesRef.current = variables; }, [variables]);
+  useEffect(() => { statusRef.current = status; }, [status]);
+  useEffect(() => { echoStreamsToMainRef.current = echoStreamsToMain; }, [echoStreamsToMain]);
+  useEffect(() => { activeStreamRef.current = activeStream; }, [activeStream]);
+  useEffect(() => { currentProfileRef.current = currentProfile; }, [currentProfile]);
+
+  // Synchronous variable modification: instantly available to running scripts and triggers without lag
+  const updateGlobalVariable = useCallback((key: string, value: string) => {
+    const cleanKey = key.replace(/^[\$#]/, '').toLowerCase();
+    variablesRef.current = {
+      ...variablesRef.current,
+      [cleanKey]: value,
+    };
+    setVariables((prev) => ({
+      ...prev,
+      [cleanKey]: value,
+    }));
+    // Immediately notify active script interpreter so waiting actions or loops resume with zero lag
+    if (interpreterRef.current) {
+      interpreterRef.current.onVariableChanged(cleanKey, value);
+    }
+  }, []);
+
+  const deleteGlobalVariable = useCallback((key: string) => {
+    const cleanKey = key.replace(/^[\$#]/, '').toLowerCase();
+    const next = { ...variablesRef.current };
+    delete next[cleanKey];
+    variablesRef.current = next;
+    setVariables(next);
+  }, []);
+
   // Switch active window stream and clear its unread badge
   const handleSelectStream = useCallback((streamId: string) => {
     setActiveStream(streamId);
@@ -193,25 +241,36 @@ export const App: React.FC = () => {
 
   // Clear output of a specific stream or active stream
   const handleClearOutput = useCallback((streamId?: string) => {
-    const target = streamId || activeStream;
+    const target = streamId || activeStreamRef.current;
     setWindowBuffers((prev) => ({
       ...prev,
       [target]: [],
     }));
-  }, [activeStream]);
+  }, []);
 
-  // Robust Stream & Line Router (Zero-Lag Pre-Computed Highlighting & Per-Window Buffering)
-  const addOutputLine = useCallback(
-    (lineData: Partial<OutputLine>) => {
+  // Robust Stream & Line Router (Zero-Lag Pre-Computed Highlighting & Batch Window Buffering)
+  const addOutputLines = useCallback((linesData: Partial<OutputLine>[]) => {
+    if (!linesData || linesData.length === 0) return;
+
+    const currentSubs = substitutesRef.current;
+    const currentHls = highlightsRef.current;
+    const currentTriggers = triggersRef.current;
+    const echoToMain = echoStreamsToMainRef.current;
+    const activeStr = activeStreamRef.current;
+
+    const processedLines: OutputLine[] = [];
+    const triggerActionsToRun: { actionType: string; actionValue: string }[] = [];
+
+    for (const lineData of linesData) {
       const rawText = lineData.text || '';
-      const processedText = rawText ? applySubstitutes(rawText, substitutes) : '';
+      const processedText = rawText ? applySubstitutes(rawText, currentSubs) : '';
       const targetStream = lineData.stream || 'main';
 
       // Pre-compute highlights at ingestion time (Genie Core/Game.cs PrintTextWithParse model)
-      const hl = computeLineHighlights(processedText, highlights);
+      const hl = computeLineHighlights(processedText, currentHls);
 
       const newLine: OutputLine = {
-        id: lineData.id || `line-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+        id: lineData.id || `line-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
         text: processedText,
         stream: targetStream,
         timestamp: lineData.timestamp || new Date().toLocaleTimeString(),
@@ -223,86 +282,88 @@ export const App: React.FC = () => {
         isSystem: lineData.isSystem,
       };
 
-      // Route directly to the destination window's buffer (stores up to 1000 lines)
-      setWindowBuffers((prev) => {
-        const existing = prev[targetStream] || [];
-        const updated = [...existing.slice(-999), newLine];
+      processedLines.push(newLine);
 
-        // Also echo to Main if enabled and not already Main or Raw or System
-        if (
-          echoStreamsToMain &&
-          targetStream !== 'main' &&
-          targetStream !== 'raw' &&
-          !lineData.isSystem
-        ) {
-          const mainExisting = prev.main || [];
-          return {
-            ...prev,
-            [targetStream]: updated,
-            main: [...mainExisting.slice(-999), newLine],
-          };
-        }
-
-        return {
-          ...prev,
-          [targetStream]: updated,
-        };
-      });
-
-      // Update unread count for non-active windows
-      setWindowConfigs((prev) =>
-        prev.map((cfg) => {
-          if (cfg.id === targetStream && targetStream !== activeStream) {
-            return { ...cfg, unreadCount: cfg.unreadCount + 1 };
-          }
-          return cfg;
-        })
-      );
-
-      // Inform active script of new output
+      // Inform active script of new output (for instant match / waitfor / script actions)
       if (interpreterRef.current && processedText && !lineData.isInput) {
         interpreterRef.current.onGameOutput(processedText);
       }
 
-      // Check Autonomous Triggers
-      if (!lineData.isInput && processedText) {
-        triggers.forEach((tr) => {
-          if (!tr.enabled) return;
-          try {
-            const regex = tr.isRegex
-              ? new RegExp(tr.pattern, 'i')
-              : new RegExp(tr.pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-
-            if (regex.test(processedText)) {
-              if (tr.actionType === 'command') {
-                setTimeout(() => {
-                  handleCommand(tr.actionValue, true);
-                }, 250);
-              } else if (tr.actionType === 'echo') {
-                setTimeout(() => {
-                  addOutputLine({
-                    text: tr.actionValue,
-                    stream: 'main',
-                    color: '#a855f7',
-                    bold: true,
-                  });
-                }, 150);
-              }
-            }
-          } catch {
-            // Ignore regex error
-          }
+      // Check Autonomous Triggers with capture-group substitution ($1, $2, etc.)
+      if (!lineData.isInput && processedText && currentTriggers.length > 0) {
+        processTriggers(processedText, currentTriggers, (actionType, actionValue) => {
+          triggerActionsToRun.push({ actionType, actionValue });
         });
       }
+    }
+
+    // Batch update window buffers in a single React state flush
+    setWindowBuffers((prev) => {
+      const next = { ...prev };
+      for (const line of processedLines) {
+        const stream = line.stream;
+        const existing = next[stream] || [];
+        next[stream] = [...existing.slice(-999), line];
+
+        // Also echo to Main if enabled and not already Main or Raw or System
+        if (echoToMain && stream !== 'main' && stream !== 'raw' && !line.isSystem) {
+          const mainExisting = next.main || [];
+          next.main = [...mainExisting.slice(-999), line];
+        }
+      }
+      return next;
+    });
+
+    // Update unread count for non-active windows in one pass
+    const unreadIncrements: Record<string, number> = {};
+    for (const line of processedLines) {
+      if (line.stream !== activeStr) {
+        unreadIncrements[line.stream] = (unreadIncrements[line.stream] || 0) + 1;
+      }
+    }
+    if (Object.keys(unreadIncrements).length > 0) {
+      setWindowConfigs((prev) =>
+        prev.map((cfg) => {
+          const inc = unreadIncrements[cfg.id];
+          return inc ? { ...cfg, unreadCount: cfg.unreadCount + inc } : cfg;
+        })
+      );
+    }
+
+    // Execute matched trigger actions immediately without artificial delays
+    if (triggerActionsToRun.length > 0) {
+      for (const act of triggerActionsToRun) {
+        if (act.actionType === 'command') {
+          handleCommandRef.current(act.actionValue, true);
+        } else if (act.actionType === 'echo') {
+          addOutputLines([
+            {
+              text: act.actionValue,
+              stream: 'main',
+              color: '#a855f7',
+              bold: true,
+            },
+          ]);
+        }
+      }
+    }
+  }, []);
+
+  const addOutputLine = useCallback(
+    (lineData: Partial<OutputLine>) => {
+      addOutputLines([lineData]);
     },
-    [substitutes, highlights, echoStreamsToMain, activeStream, triggers]
+    [addOutputLines]
   );
 
   // Initialize XML Stream Parser mirroring Core/Game.cs with GRX-024 flush fix
   useEffect(() => {
     xmlParserRef.current = new GameXmlStreamParser({
       onAddLine: (line) => {
-        addOutputLine(line);
+        addOutputLines([line]);
+      },
+      onAddLines: (lines) => {
+        addOutputLines(lines);
       },
       onClearStream: (streamId) => {
         handleClearOutput(streamId);
@@ -341,7 +402,7 @@ export const App: React.FC = () => {
         setStatus((prev) => ({ ...prev, preparedSpell: spell }));
       },
     });
-  }, [addOutputLine, handleClearOutput]);
+  }, [addOutputLines, handleClearOutput]);
 
   // Tab focus recovery: ensure windows repaint cleanly and never stay black when returning to Genie
   useEffect(() => {
@@ -420,6 +481,96 @@ export const App: React.FC = () => {
 
         if (cCmd === 'echo') {
           addOutputLine({ text: cArg, stream: 'main', color: '#cbd5e1' });
+          return;
+        }
+
+        // Global Variable Management (#var, #variable, #setvariable)
+        if (cCmd === 'var' || cCmd === 'variable' || cCmd === 'setvariable' || cCmd === 'setvar') {
+          if (!cArg) {
+            // Display all global variables
+            const all = { ...variablesRef.current };
+            const keys = Object.keys(all);
+            if (keys.length === 0) {
+              addOutputLine({
+                text: '[Genie Variables] No global variables defined. Set one with "#var <name> <value>".',
+                stream: 'main',
+                color: '#94a3b8',
+              });
+            } else {
+              addOutputLine({
+                text: `--- Genie Global Variables (${keys.length}) ---`,
+                stream: 'main',
+                color: '#38bdf8',
+                bold: true,
+              });
+              keys.sort().forEach((k) => {
+                addOutputLine({
+                  text: `  $${k} = "${all[k]}"`,
+                  stream: 'main',
+                  color: '#e2e8f0',
+                });
+              });
+            }
+            return;
+          }
+
+          const spaceIdx = cArg.indexOf(' ');
+          if (spaceIdx === -1) {
+            // Query single variable: #var target
+            const varName = cArg.toLowerCase();
+            const val =
+              variablesRef.current[varName] ??
+              getSystemVariable(varName, statusRef.current, currentProfileRef.current?.name);
+            if (val !== undefined) {
+              addOutputLine({
+                text: `[Genie Variable] $${varName} = "${val}"`,
+                stream: 'main',
+                color: '#38bdf8',
+              });
+            } else {
+              addOutputLine({
+                text: `[Genie Variable] $${varName} is not set.`,
+                stream: 'main',
+                color: '#94a3b8',
+              });
+            }
+            return;
+          }
+
+          // Set variable: #var <name> <value>
+          const varName = cArg.slice(0, spaceIdx).trim();
+          let varVal = cArg.slice(spaceIdx + 1).trim();
+
+          // Substitute variables in value if present
+          varVal = substituteVariablesInText(
+            varVal,
+            undefined,
+            variablesRef.current,
+            statusRef.current,
+            currentProfileRef.current?.name
+          );
+
+          updateGlobalVariable(varName, varVal);
+          if (!isAutomated) {
+            addOutputLine({
+              text: `[Genie Variable] Set $${varName} = "${varVal}"`,
+              stream: 'main',
+              color: '#22c55e',
+            });
+          }
+          return;
+        }
+
+        // Delete variable (#unvar, #deletevariable)
+        if (cCmd === 'unvar' || cCmd === 'deletevariable') {
+          if (cArg) {
+            deleteGlobalVariable(cArg.trim());
+            addOutputLine({
+              text: `[Genie Variable] Removed $${cArg.trim()}`,
+              stream: 'main',
+              color: '#ef4444',
+            });
+          }
           return;
         }
 
@@ -535,24 +686,44 @@ export const App: React.FC = () => {
         setCurrentRoomId(res.newRoomId);
       }
     },
-    [aliases, currentRoomId, inventory, roomItems, rooms, status, addOutputLine, scripts]
+    [aliases, currentRoomId, inventory, roomItems, rooms, status, addOutputLine, scripts, deleteGlobalVariable, updateGlobalVariable]
   );
 
+  useEffect(() => {
+    handleCommandRef.current = handleCommand;
+  }, [handleCommand]);
+
   // Script runner methods
-  const startScript = (name: string, code: string) => {
+  const startScript = (name: string, code: string, args: string[] = []) => {
     if (interpreterRef.current) {
       interpreterRef.current.destroy();
     }
 
-    const interp = new GenieScriptInterpreter(name, code, {
-      sendOutput: (text, color) => addOutputLine({ text, stream: 'main', color }),
-      sendCommand: (cmd) => handleCommand(cmd, true),
-      onStateChange: (st) => setActiveScriptState(st),
-      onFinished: () => {
-        setActiveScriptState(null);
-        interpreterRef.current = null;
+    const interp = new GenieScriptInterpreter(
+      name,
+      code,
+      {
+        sendOutput: (text, color) => addOutputLines([{ text, stream: 'main', color }]),
+        sendCommand: (cmd) => handleCommand(cmd, true),
+        onStateChange: (st) => setActiveScriptState(st),
+        onFinished: () => {
+          setActiveScriptState(null);
+          interpreterRef.current = null;
+        },
+        getGlobalVariable: (varName) => {
+          const clean = varName.replace(/^[\$%]/, '').toLowerCase();
+          if (variablesRef.current[clean] !== undefined) return variablesRef.current[clean];
+          return getSystemVariable(clean, statusRef.current, currentProfileRef.current?.name);
+        },
+        setGlobalVariable: (varName, val) => {
+          updateGlobalVariable(varName, val);
+        },
+        getAllGlobalVariables: () => {
+          return { ...variablesRef.current };
+        },
       },
-    });
+      args
+    );
 
     interpreterRef.current = interp;
     interp.start();

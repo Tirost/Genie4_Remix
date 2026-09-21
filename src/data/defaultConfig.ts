@@ -250,6 +250,22 @@ export const DEFAULT_TRIGGERS: TriggerRule[] = [
     actionValue: 'nod',
     enabled: false,
   },
+  {
+    id: 't-4',
+    pattern: '^You manage to find a ([a-zA-Z\\s]+)!',
+    isRegex: true,
+    actionType: 'command',
+    actionValue: '#var last_foraged $1',
+    enabled: true,
+  },
+  {
+    id: 't-5',
+    pattern: '^Roundtime:\\s*(\\d+)\\s*sec',
+    isRegex: true,
+    actionType: 'command',
+    actionValue: '#var last_roundtime $1',
+    enabled: true,
+  },
 ];
 
 export const DEFAULT_SUBSTITUTES: SubstituteRule[] = [

@@ -170,7 +170,7 @@ export interface ScriptState {
   waitReason?: string;
   variables: Record<string, string>;
   labels: Record<string, number>;
-  activeMatches: { label: string; pattern: string }[];
+  activeMatches: { label: string; pattern: string; isRegex?: boolean }[];
   matchTimeoutTimer?: number;
 }
 

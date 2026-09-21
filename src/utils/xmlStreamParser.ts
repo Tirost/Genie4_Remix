@@ -17,7 +17,8 @@ export const DEFAULT_STREAM_WINDOWS: StreamWindowConfig[] = [
 ];
 
 export interface XMLParserCallbacks {
-  onAddLine: (line: OutputLine) => void;
+  onAddLine?: (line: OutputLine) => void;
+  onAddLines?: (lines: OutputLine[]) => void;
   onClearStream: (streamId: string) => void;
   onRegisterStreamWindow: (config: StreamWindowConfig) => void;
   onRoundTime?: (seconds: number) => void;
@@ -44,7 +45,8 @@ export const PRESET_COLORS: Record<string, { color: string; bgColor?: string; bo
 
 /**
  * High-performance XML Stream Parser for DragonRealms and Genie Remix.
- * Replicates Core/Game.cs stream target management with GRX-024 single-row flush fix.
+ * Replicates Core/Game.cs stream target management with GRX-024 single-row flush fix
+ * and batch line emission for zero UI lag.
  */
 export class GameXmlStreamParser {
   private streamStack: string[] = ['main'];
@@ -53,6 +55,7 @@ export class GameXmlStreamParser {
   private isBold = false;
   private activePreset: string | null = null;
   private rawMode = false;
+  private pendingBatch: OutputLine[] = [];
 
   constructor(callbacks: XMLParserCallbacks) {
     this.callbacks = callbacks;
@@ -71,9 +74,10 @@ export class GameXmlStreamParser {
   }
 
   /**
-   * Translates common XML and HTML entities
+   * Translates common XML and HTML entities in a single pass
    */
   public static decodeEntities(text: string): string {
+    if (!text || !text.includes('&')) return text;
     return text
       .replace(/&lt;/g, '<')
       .replace(/&gt;/g, '>')
@@ -109,9 +113,11 @@ export class GameXmlStreamParser {
   public parseGameRow(rowText: string) {
     if (!rowText) return;
 
+    this.pendingBatch = [];
+
     // Send to raw stream if enabled
     if (this.rawMode) {
-      this.callbacks.onAddLine({
+      this.pendingBatch.push({
         id: `raw-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
         text: rowText,
         stream: 'raw',
@@ -120,9 +126,10 @@ export class GameXmlStreamParser {
       });
     }
 
-    // Fast path: if no '<' or '&', route directly to current stream
+    // Fast path: if no '<' and '&', route directly to current stream
     if (!rowText.includes('<') && !rowText.includes('&')) {
       this.emitLine(rowText, this.currentStream);
+      this.flushBatch();
       return;
     }
 
@@ -136,7 +143,6 @@ export class GameXmlStreamParser {
       if (char === '<') {
         const closeIdx = rowText.indexOf('>', i);
         if (closeIdx === -1) {
-          // Incomplete tag at row end, treat as text
           textBuffer += char;
           i++;
           continue;
@@ -169,6 +175,21 @@ export class GameXmlStreamParser {
     if (textBuffer.length > 0) {
       this.emitLine(textBuffer, this.currentStream);
     }
+
+    this.flushBatch();
+  }
+
+  private flushBatch() {
+    if (this.pendingBatch.length === 0) return;
+
+    if (this.callbacks.onAddLines) {
+      this.callbacks.onAddLines([...this.pendingBatch]);
+    } else if (this.callbacks.onAddLine) {
+      for (const line of this.pendingBatch) {
+        this.callbacks.onAddLine(line);
+      }
+    }
+    this.pendingBatch = [];
   }
 
   /**
@@ -393,6 +414,6 @@ export class GameXmlStreamParser {
       bold,
     };
 
-    this.callbacks.onAddLine(line);
+    this.pendingBatch.push(line);
   }
 }
