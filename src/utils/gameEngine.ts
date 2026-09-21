@@ -253,6 +253,7 @@ export function processTriggers(
 
     const regex = getCachedRegex(tr.pattern, tr.isRegex, true);
     if (!regex) continue;
+    regex.lastIndex = 0;
 
     const match = regex.exec(text);
     if (match) {
@@ -299,6 +300,7 @@ export function computeLineHighlights(
   for (const h of highlights) {
     if (!h.enabled) continue;
     const regex = getCachedRegex(h.pattern, h.isRegex, h.isCaseInsensitive);
+    if (regex) regex.lastIndex = 0;
     if (regex && regex.test(text)) {
       return {
         color: h.fgColor,

@@ -280,6 +280,7 @@ export const App: React.FC = () => {
         isPrompt: lineData.isPrompt,
         isInput: lineData.isInput,
         isSystem: lineData.isSystem,
+        segments: lineData.segments,
       };
 
       processedLines.push(newLine);

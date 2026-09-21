@@ -28,7 +28,7 @@ export interface XMLParserCallbacks {
   onPrompt?: (promptText: string) => void;
 }
 
-// Preset color map mirroring Genie's PresetList
+// Preset color map mirroring Genie's PresetList and DragonRealms standards
 export const PRESET_COLORS: Record<string, { color: string; bgColor?: string; bold?: boolean }> = {
   thoughts: { color: '#c084fc', bold: false },
   thought: { color: '#c084fc', bold: false },
@@ -38,15 +38,16 @@ export const PRESET_COLORS: Record<string, { color: string; bgColor?: string; bo
   say: { color: '#fef08a', bold: false },
   roomname: { color: '#f59e0b', bold: true },
   roomdesc: { color: '#93c5fd', bold: false },
-  creatures: { color: '#f87171', bold: true },
+  creatures: { color: '#38bdf8', bold: true },
   familiar: { color: '#a7f3d0', bold: false },
   combat: { color: '#ef4444', bold: false },
+  bold: { color: '#38bdf8', bold: true },
 };
 
 /**
  * High-performance XML Stream Parser for DragonRealms and Genie Remix.
- * Replicates Core/Game.cs stream target management with GRX-024 single-row flush fix
- * and batch line emission for zero UI lag.
+ * Replicates Core/Game.cs stream target management with GRX-024 single-row flush fix,
+ * full inline pushBold/popBold segment styling, and batch line emission for zero UI lag.
  */
 export class GameXmlStreamParser {
   private streamStack: string[] = ['main'];
@@ -56,6 +57,7 @@ export class GameXmlStreamParser {
   private activePreset: string | null = null;
   private rawMode = false;
   private pendingBatch: OutputLine[] = [];
+  private currentLineSegments: { text: string; color?: string; bgColor?: string; bold?: boolean }[] = [];
 
   constructor(callbacks: XMLParserCallbacks) {
     this.callbacks = callbacks;
@@ -128,7 +130,8 @@ export class GameXmlStreamParser {
 
     // Fast path: if no '<' and '&', route directly to current stream
     if (!rowText.includes('<') && !rowText.includes('&')) {
-      this.emitLine(rowText, this.currentStream);
+      this.flushSegmentToLine(rowText);
+      this.emitCurrentLine();
       this.flushBatch();
       return;
     }
@@ -171,10 +174,11 @@ export class GameXmlStreamParser {
       }
     }
 
-    // End of row: flush remaining buffered text to current target
+    // End of row: flush remaining buffered text to line and emit
     if (textBuffer.length > 0) {
-      this.emitLine(textBuffer, this.currentStream);
+      this.flushSegmentToLine(textBuffer);
     }
+    this.emitCurrentLine();
 
     this.flushBatch();
   }
@@ -190,6 +194,84 @@ export class GameXmlStreamParser {
       }
     }
     this.pendingBatch = [];
+  }
+
+  /**
+   * Appends text with active styling (bold, preset) to the current line's segment list.
+   * Splits on newlines (\n) to emit completed lines immediately.
+   */
+  private flushSegmentToLine(text: string): void {
+    if (!text) return;
+
+    // Determine active segment formatting
+    const preset = this.activePreset ? PRESET_COLORS[this.activePreset] : undefined;
+    const isSegmentBold = this.isBold || (preset?.bold ?? false);
+    let segColor = preset ? preset.color : undefined;
+    const segBgColor = preset ? preset.bgColor : undefined;
+
+    // DragonRealms & Genie standard: bold text inside <pushBold/> is styled with bold highlight color (Cyan '#38bdf8')
+    if (this.isBold && !segColor) {
+      segColor = PRESET_COLORS['bold']?.color || '#38bdf8';
+    }
+
+    // Normalize carriage returns
+    const clean = text.replace(/\r\n/g, '\n').replace(/\r/g, '');
+
+    if (clean.includes('\n')) {
+      const parts = clean.split('\n');
+      for (let idx = 0; idx < parts.length; idx++) {
+        const part = parts[idx];
+        if (part.length > 0) {
+          this.currentLineSegments.push({
+            text: part,
+            color: segColor,
+            bgColor: segBgColor,
+            bold: isSegmentBold,
+          });
+        }
+        if (idx < parts.length - 1) {
+          this.emitCurrentLine();
+        }
+      }
+    } else {
+      this.currentLineSegments.push({
+        text: clean,
+        color: segColor,
+        bgColor: segBgColor,
+        bold: isSegmentBold,
+      });
+    }
+  }
+
+  /**
+   * Finalizes the current line segments into an OutputLine in the current stream.
+   */
+  private emitCurrentLine(): void {
+    if (this.currentLineSegments.length === 0) return;
+
+    const fullText = this.currentLineSegments.map((s) => s.text).join('');
+    if (fullText.length === 0) {
+      this.currentLineSegments = [];
+      return;
+    }
+
+    const allBold = this.currentLineSegments.every((s) => s.bold);
+    const hasAnyBold = this.currentLineSegments.some((s) => s.bold);
+    const hasDifferentStyles = this.currentLineSegments.length > 1;
+
+    const line: OutputLine = {
+      id: `line-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      text: fullText,
+      stream: this.currentStream,
+      timestamp: new Date().toLocaleTimeString(),
+      color: !hasDifferentStyles ? this.currentLineSegments[0].color : undefined,
+      bgColor: !hasDifferentStyles ? this.currentLineSegments[0].bgColor : undefined,
+      bold: allBold || this.isBold,
+      segments: hasDifferentStyles || hasAnyBold ? [...this.currentLineSegments] : undefined,
+    };
+
+    this.pendingBatch.push(line);
+    this.currentLineSegments = [];
   }
 
   /**
@@ -210,11 +292,12 @@ export class GameXmlStreamParser {
         const rawTarget = match[1];
         const newTarget = GameXmlStreamParser.normalizeStreamId(rawTarget);
 
-        // GRX-024: Flush text buffered before this tag to the old target!
+        // Flush text and current line to previous stream before switching
         if (currentBuffer.length > 0) {
-          this.emitLine(currentBuffer, this.currentStream);
+          this.flushSegmentToLine(currentBuffer);
           updateBuffer('');
         }
+        this.emitCurrentLine();
 
         this.streamStack.push(this.currentStream);
         this.currentStream = newTarget;
@@ -232,11 +315,12 @@ export class GameXmlStreamParser {
 
     // 2. popStream: <popStream/>
     if (trimmed.startsWith('popStream') || trimmed.startsWith('/pushStream')) {
-      // GRX-024: Flush text buffered before popStream to the current stream before popping!
+      // Flush text and line to current stream before popping
       if (currentBuffer.length > 0) {
-        this.emitLine(currentBuffer, this.currentStream);
+        this.flushSegmentToLine(currentBuffer);
         updateBuffer('');
       }
+      this.emitCurrentLine();
 
       if (this.streamStack.length > 1) {
         this.currentStream = this.streamStack.pop() || 'main';
@@ -262,9 +346,11 @@ export class GameXmlStreamParser {
       if (match && match[1]) {
         const compId = match[1].toLowerCase();
         if (currentBuffer.length > 0) {
-          this.emitLine(currentBuffer, this.currentStream);
+          this.flushSegmentToLine(currentBuffer);
           updateBuffer('');
         }
+        this.emitCurrentLine();
+
         if (compId.startsWith('room')) {
           this.streamStack.push(this.currentStream);
           this.currentStream = 'room';
@@ -278,9 +364,11 @@ export class GameXmlStreamParser {
 
     if (trimmed.startsWith('/component') || trimmed.startsWith('/compDef')) {
       if (currentBuffer.length > 0) {
-        this.emitLine(currentBuffer, this.currentStream);
+        this.flushSegmentToLine(currentBuffer);
         updateBuffer('');
       }
+      this.emitCurrentLine();
+
       if (this.streamStack.length > 1) {
         this.currentStream = this.streamStack.pop() || 'main';
       } else {
@@ -314,21 +402,37 @@ export class GameXmlStreamParser {
     if (trimmed.startsWith('preset')) {
       const match = tag.match(/id=['"]([^'"]+)['"]/i);
       if (match && match[1]) {
+        if (currentBuffer.length > 0) {
+          this.flushSegmentToLine(currentBuffer);
+          updateBuffer('');
+        }
         this.activePreset = match[1].toLowerCase();
       }
       return;
     }
     if (trimmed.startsWith('/preset')) {
+      if (currentBuffer.length > 0) {
+        this.flushSegmentToLine(currentBuffer);
+        updateBuffer('');
+      }
       this.activePreset = null;
       return;
     }
 
     // 6. Bold: <pushBold/>, <popBold/>
     if (trimmed === 'pushBold' || trimmed === 'pushBold/') {
+      if (currentBuffer.length > 0) {
+        this.flushSegmentToLine(currentBuffer);
+        updateBuffer('');
+      }
       this.isBold = true;
       return;
     }
     if (trimmed === 'popBold' || trimmed === 'popBold/' || trimmed === '/pushBold') {
+      if (currentBuffer.length > 0) {
+        this.flushSegmentToLine(currentBuffer);
+        updateBuffer('');
+      }
       this.isBold = false;
       return;
     }
@@ -396,6 +500,10 @@ export class GameXmlStreamParser {
       color = p.color;
       bgColor = p.bgColor;
       if (p.bold !== undefined) bold = p.bold;
+    }
+
+    if (this.isBold && !color) {
+      color = PRESET_COLORS['bold']?.color || '#38bdf8';
     }
 
     // Clean up carriage returns

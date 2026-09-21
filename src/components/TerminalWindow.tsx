@@ -91,7 +91,23 @@ const TerminalLineItem = memo(({ line }: { line: OutputLine }) => {
       }}
     >
       {line.isInput && <span className="text-amber-500 mr-1 select-none font-bold">&gt;</span>}
-      <span className="whitespace-pre-wrap break-words">{line.text}</span>
+      {line.segments && line.segments.length > 0 ? (
+        line.segments.map((seg, idx) => (
+          <span
+            key={idx}
+            className="whitespace-pre-wrap break-words"
+            style={{
+              color: seg.color || line.color,
+              backgroundColor: seg.bgColor || line.bgColor,
+              fontWeight: seg.bold ? 700 : (line.bold ? 700 : 400),
+            }}
+          >
+            {seg.text}
+          </span>
+        ))
+      ) : (
+        <span className="whitespace-pre-wrap break-words">{line.text}</span>
+      )}
     </div>
   );
 });

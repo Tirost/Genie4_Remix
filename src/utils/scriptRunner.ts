@@ -28,6 +28,8 @@ export class GenieScriptInterpreter {
   private waitForMatch: { pattern: string; isRegex: boolean; label?: string } | null = null;
   private counter: number = 0;
   private lastStateNotifyTime: number = 0;
+  private isWaitingForServerInteraction = false;
+  private recentOutputBuffer: { text: string; time: number }[] = [];
 
   constructor(
     scriptName: string,
@@ -119,7 +121,12 @@ export class GenieScriptInterpreter {
 
   public stop() {
     this.state.status = 'stopped';
-    if (this.timeoutId) clearTimeout(this.timeoutId);
+    this.isWaitingForServerInteraction = false;
+    this.recentOutputBuffer = [];
+    if (this.timeoutId) {
+      clearTimeout(this.timeoutId);
+      this.timeoutId = null;
+    }
     this.notifyStateChange(true);
     this.callbacks.sendOutput(`[Script] Stopped: ${this.state.name}`, '#ef4444');
     this.callbacks.onFinished(this.state.name);
@@ -127,16 +134,83 @@ export class GenieScriptInterpreter {
 
   public destroy() {
     this.isDestroyed = true;
-    if (this.timeoutId) clearTimeout(this.timeoutId);
+    this.isWaitingForServerInteraction = false;
+    this.recentOutputBuffer = [];
+    if (this.timeoutId) {
+      clearTimeout(this.timeoutId);
+      this.timeoutId = null;
+    }
   }
 
-  // Real-time game output processor: check script triggers, matches, and waitfor
+  /**
+   * Helper to check a line against all active matches (match / matchre).
+   * Returns true and triggers immediate label jump if matched.
+   */
+  private checkLineAgainstMatches(line: string): boolean {
+    if (!line || this.state.activeMatches.length === 0) return false;
+
+    for (const match of this.state.activeMatches) {
+      let isMatched = false;
+      let matchedGroups: string[] = [];
+
+      if (match.isRegex) {
+        const regex = getCachedRegex(match.pattern, true, true);
+        if (regex) {
+          regex.lastIndex = 0;
+          const execMatch = regex.exec(line);
+          if (execMatch) {
+            isMatched = true;
+            matchedGroups = Array.from(execMatch);
+          }
+        }
+      } else {
+        if (line.toLowerCase().includes(match.pattern.toLowerCase())) {
+          isMatched = true;
+        }
+      }
+
+      if (isMatched) {
+        this.callbacks.sendOutput(
+          `[Script] Matched "${match.pattern}" -> jumping to ${match.label}`,
+          '#a855f7'
+        );
+
+        // Populate capture variables %0, %1, etc.
+        if (matchedGroups.length > 0) {
+          matchedGroups.forEach((g, idx) => {
+            this.state.variables[idx.toString()] = g;
+          });
+        }
+
+        this.state.activeMatches = [];
+        this.state.status = 'running';
+        this.state.waitReason = undefined;
+        if (this.timeoutId) {
+          clearTimeout(this.timeoutId);
+          this.timeoutId = null;
+        }
+        this.jumpToLabel(match.label);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Real-time game output processor: check script triggers, matches, wait, and waitfor
   public onGameOutput(line: string) {
     if (this.isDestroyed || !line) return;
+
+    // Buffer recent output line for zero-lag matching
+    const now = Date.now();
+    this.recentOutputBuffer.push({ text: line, time: now });
+    if (this.recentOutputBuffer.length > 25) {
+      this.recentOutputBuffer.splice(0, this.recentOutputBuffer.length - 25);
+    }
 
     // 1. Process script-scoped actions (active autonomous triggers declared in the script)
     for (const action of this.scriptActions) {
       const regex = getCachedRegex(action.pattern, action.isRegex, true);
+      if (regex) regex.lastIndex = 0;
       if (regex && regex.test(line)) {
         const cmd = this.replaceVariables(action.command);
         this.callbacks.sendOutput(`[Script Trigger] -> ${cmd}`, '#a855f7');
@@ -144,12 +218,26 @@ export class GenieScriptInterpreter {
       }
     }
 
-    // 2. Process active waitfor / waitforre
+    // 2. Genie "wait" command: pauses script until next server interaction, resumes immediately!
+    if (this.state.status === 'waiting' && this.isWaitingForServerInteraction) {
+      this.isWaitingForServerInteraction = false;
+      this.state.status = 'running';
+      this.state.waitReason = undefined;
+      if (this.timeoutId) {
+        clearTimeout(this.timeoutId);
+        this.timeoutId = null;
+      }
+      this.step();
+      return;
+    }
+
+    // 3. Process active waitfor / waitforre
     if (this.state.status === 'waiting' && this.waitForMatch) {
       const target = this.waitForMatch;
       let matched = false;
       if (target.isRegex) {
         const regex = getCachedRegex(target.pattern, true, true);
+        if (regex) regex.lastIndex = 0;
         if (regex && regex.test(line)) matched = true;
       } else {
         if (line.toLowerCase().includes(target.pattern.toLowerCase())) matched = true;
@@ -159,7 +247,10 @@ export class GenieScriptInterpreter {
         this.waitForMatch = null;
         this.state.status = 'running';
         this.state.waitReason = undefined;
-        if (this.timeoutId) clearTimeout(this.timeoutId);
+        if (this.timeoutId) {
+          clearTimeout(this.timeoutId);
+          this.timeoutId = null;
+        }
         if (target.label) {
           this.jumpToLabel(target.label);
         } else {
@@ -169,47 +260,10 @@ export class GenieScriptInterpreter {
       }
     }
 
-    // 3. Process active matches from match / matchre / matchwait
+    // 4. Process active matches from match / matchre / matchwait immediately
     if (this.state.status === 'waiting' && this.state.activeMatches.length > 0) {
-      for (const match of this.state.activeMatches) {
-        let isMatched = false;
-        let matchedGroups: string[] = [];
-
-        if (match.isRegex) {
-          const regex = getCachedRegex(match.pattern, true, true);
-          if (regex) {
-            const execMatch = regex.exec(line);
-            if (execMatch) {
-              isMatched = true;
-              matchedGroups = Array.from(execMatch);
-            }
-          }
-        } else {
-          if (line.toLowerCase().includes(match.pattern.toLowerCase())) {
-            isMatched = true;
-          }
-        }
-
-        if (isMatched) {
-          this.callbacks.sendOutput(
-            `[Script] Matched pattern "${match.pattern}" -> jumping to ${match.label}`,
-            '#a855f7'
-          );
-
-          // Populate capture arguments if regex match had groups
-          if (matchedGroups.length > 0) {
-            matchedGroups.forEach((g, idx) => {
-              this.state.variables[idx.toString()] = g;
-            });
-          }
-
-          this.state.activeMatches = [];
-          this.state.status = 'running';
-          this.state.waitReason = undefined;
-          if (this.timeoutId) clearTimeout(this.timeoutId);
-          this.jumpToLabel(match.label);
-          return;
-        }
+      if (this.checkLineAgainstMatches(line)) {
+        return;
       }
     }
   }
@@ -324,10 +378,33 @@ export class GenieScriptInterpreter {
         }
 
         case 'put': {
-          // Sending command to game yields to allow game to respond
+          // Send command to game immediately without artificial delay, so matching text can be evaluated instantly
           this.callbacks.sendCommand(args);
           this.notifyStateChange();
-          this.timeoutId = setTimeout(() => this.step(), 180);
+          continue;
+        }
+
+        case 'wait': {
+          // Genie "wait": pauses script until the next server interaction (or optional timeout)
+          const timeoutSeconds = parseFloat(args) || 0;
+          this.state.status = 'waiting';
+          this.isWaitingForServerInteraction = true;
+          this.state.waitReason = timeoutSeconds > 0
+            ? `Waiting for server interaction (${timeoutSeconds}s max)`
+            : 'Waiting for server interaction';
+          this.notifyStateChange(true);
+
+          if (timeoutSeconds > 0) {
+            if (this.timeoutId) clearTimeout(this.timeoutId);
+            this.timeoutId = setTimeout(() => {
+              if (this.state.status === 'waiting' && this.isWaitingForServerInteraction) {
+                this.isWaitingForServerInteraction = false;
+                this.state.status = 'running';
+                this.state.waitReason = undefined;
+                this.step();
+              }
+            }, timeoutSeconds * 1000);
+          }
           return;
         }
 
@@ -459,8 +536,18 @@ export class GenieScriptInterpreter {
           this.state.waitReason = `Waiting for game match (${timeoutSeconds}s max)`;
           this.notifyStateChange(true);
 
+          // Zero-delay check: match immediately if game response arrived in this tick or recent buffer!
+          const now = Date.now();
+          const recent = this.recentOutputBuffer.filter((e) => now - e.time < 2500);
+          for (let r = recent.length - 1; r >= 0; r--) {
+            if (this.checkLineAgainstMatches(recent[r].text)) {
+              return;
+            }
+          }
+
+          if (this.timeoutId) clearTimeout(this.timeoutId);
           this.timeoutId = setTimeout(() => {
-            if (this.state.status === 'waiting') {
+            if (this.state.status === 'waiting' && this.state.activeMatches.length > 0) {
               this.callbacks.sendOutput(
                 `[Script] matchwait timed out after ${timeoutSeconds}s`,
                 '#f59e0b'
@@ -479,6 +566,19 @@ export class GenieScriptInterpreter {
           this.state.status = 'waiting';
           this.state.waitReason = `Waiting for "${args}"`;
           this.notifyStateChange(true);
+
+          // Check if already matched in recent output buffer
+          const now = Date.now();
+          const recent = this.recentOutputBuffer.filter((e) => now - e.time < 2500);
+          for (let r = recent.length - 1; r >= 0; r--) {
+            if (recent[r].text.toLowerCase().includes(args.toLowerCase())) {
+              this.waitForMatch = null;
+              this.state.status = 'running';
+              this.state.waitReason = undefined;
+              this.step();
+              return;
+            }
+          }
           return;
         }
 
@@ -487,6 +587,23 @@ export class GenieScriptInterpreter {
           this.state.status = 'waiting';
           this.state.waitReason = `Waiting for regex "${args}"`;
           this.notifyStateChange(true);
+
+          // Check if already matched in recent output buffer
+          const now = Date.now();
+          const recent = this.recentOutputBuffer.filter((e) => now - e.time < 2500);
+          const regex = getCachedRegex(args, true, true);
+          if (regex) {
+            for (let r = recent.length - 1; r >= 0; r--) {
+              regex.lastIndex = 0;
+              if (regex.test(recent[r].text)) {
+                this.waitForMatch = null;
+                this.state.status = 'running';
+                this.state.waitReason = undefined;
+                this.step();
+                return;
+              }
+            }
+          }
           return;
         }
 
@@ -589,11 +706,10 @@ export class GenieScriptInterpreter {
         }
 
         default: {
-          // Fallback: send as direct game command
+          // Fallback: send as direct game command and continue immediately
           this.callbacks.sendCommand(processedLine);
           this.notifyStateChange();
-          this.timeoutId = setTimeout(() => this.step(), 160);
-          return;
+          continue;
         }
       }
     }

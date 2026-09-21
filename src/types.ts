@@ -80,6 +80,13 @@ export interface StreamWindowConfig {
 
 export type WindowLayoutMode = 'tabs' | 'split-vertical' | 'split-horizontal';
 
+export interface LineSegment {
+  text: string;
+  color?: string;
+  bgColor?: string;
+  bold?: boolean;
+}
+
 export interface OutputLine {
   id: string;
   text: string;
@@ -88,6 +95,7 @@ export interface OutputLine {
   color?: string;
   bgColor?: string;
   bold?: boolean;
+  segments?: LineSegment[];
   isPrompt?: boolean;
   isInput?: boolean;
   isSystem?: boolean;
