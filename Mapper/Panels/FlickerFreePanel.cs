@@ -1,4 +1,4 @@
-﻿using GenieClient.Genie;
+using GenieClient.Genie;
 using System.Drawing;
 using System.Windows.Forms;
 

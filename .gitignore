@@ -129,3 +129,4 @@ UpgradeLog*.htm
 # that ad-hoc local screenshots don't get committed by accident. To add a new one deliberately:
 #   git add -f screenshots/your-new-shot.png
 screenshots/
+.env

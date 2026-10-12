@@ -1,4 +1,4 @@
-﻿namespace GenieClient.Forms
+namespace GenieClient.Forms
 {
     partial class FormMapperSettings
     {

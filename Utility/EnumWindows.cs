@@ -1,4 +1,4 @@
-﻿/// <summary>
+/// <summary>
 /// Window Style Flags
 /// </summary>
 using System;
